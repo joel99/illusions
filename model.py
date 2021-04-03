@@ -43,10 +43,12 @@ class SaccadingRNN(pl.LightningModule):
             nn.Linear(conv_dim * self.conv_outh * self.conv_outw, self.cfg.SENSORY_SIZE - PROPRIOCEPTION_SIZE),
         )
 
+        # This asymmetry is fairly arbitrary. It feels like it'll take more than a
+        # linear layer to incorporate the propioceptive cue.
         self.predict_sensory = nn.Sequential(
             nn.Linear(self.cfg.HIDDEN_SIZE + PROPRIOCEPTION_SIZE, self.cfg.HIDDEN_SIZE),
             nn.ReLU(),
-            nn.Linear(self.cfg.HIDDEN_SIZE, self.conv_outh * self.conv_outw) # no nn.unflatten
+            nn.Linear(self.cfg.HIDDEN_SIZE, self.conv_outh * self.conv_outw),nn.Unflatten(-1, (self.conv_outh, self.conv_outw))
         )
         self.rnn = nn.GRU(self.cfg.SENSORY_SIZE, self.cfg.HIDDEN_SIZE, 1)
         self.cnn_predictive = nn.Sequential(
@@ -114,35 +116,50 @@ class SaccadingRNN(pl.LightningModule):
                 mask[h,w] = (h - center_h) ** 2 + (w - center_w) ** 2
         return mask
 
-    def forward(self, view, saccade_focus, hidden_state):
-        # Step the perception
-        # * TODO Joel - we can feed a whole sequence of saccades for increased efficiency.
-        # ? I wonder why it's so slow absent ^?
-        # args:
-        #   image: [B x C x H x W] - CROPPED
-        #   saccade_focus: [2] - proprioception (TODO support [T x 2])
-        #   hidden_state: [B x Hidden]
-        # returns:
-        #   hidden_state: [B x Hidden]
+    def _predict_at_location(self, state, focus):
+        r"""
+        Args:
+            state: [T x B x H] memory to make prediction with
+            focus: [T x 2] location to predict at
+        Returns:
+            patches: [B x C x H x W] predicted patches at given locations
+        """
+        prediction_cue = torch.cat([
+            state, focus.unsqueeze(1).expand(-1, state.size(1), 2)
+        ], dim=-1)
+        prediction_cue = self.predict_sensory(prediction_cue)
+        # T x B x Hidden -> [T x B] x 1 (C) x H x W
+        prediction_cue = prediction_cue.flatten(0, 1).unsqueeze(1)
+        cnn_patches = self.cnn_predictive(prediction_cue)
+        return cnn_patches.unflatten(0, (state.size(0), state.size(1)))
 
-        # TODO understand the loss itself.
+    def forward(self, view, saccade_focus, hidden_state):
+        r"""
+            Roll forward perception.
+            For efficiency, this is a batch update.
+            Requires some reshaping for a single step (and thus may be annoying for active perception)
+            Args:
+                view: [T x B x C x H x W] - cropped views.
+                saccade_focus: [T x 2] - proprioception (shared across batch)
+                hidden_state: [B x Hidden] (initial hidden state)
+            Returns:
+                cnn_view: [T x B x C x H' x W'] CNN outputs
+                outputs: [T x B x Hidden] RNN outputs
+                hidden_state: [B x Hidden] Final hidden state
+        """
         if self.adaptation is not None:
             view = self.adaptation(view)
-        cnn_view = self.cnn_sensory(view)
-        flat_view = self.flatten_sensory(cnn_view)
-
-        # Right now we are autoencoding -- we feed a view, and immediately predict it.
-        # It is worth seeing how well this does, I guess.
-        # TODO test cue prior to the CNN receiving it. Right now it's acting as autoencoder.
-        saccade_sense = saccade_focus.expand(flat_view.size(0), -1)
+        # reshape so CNN can support time dimension
+        cnn_view = self.cnn_sensory(view.flatten(0, 1))
+        flat_view = self.flatten_sensory(cnn_view) # [T x B] x Hidden
+        flat_view = flat_view.view(view.size(0), view.size(1), -1) # T x B x Hidden
+        saccade_sense = saccade_focus.unsqueeze(1).expand(
+            -1, flat_view.size(1), -1
+        ) # T x B x 2
         sense = torch.cat([flat_view, saccade_sense], dim=-1)
-        outputs, hidden_state = self.rnn(sense.unsqueeze(0), hidden_state) # B x H
-        outputs = outputs.squeeze(0)
-        prediction_cue = torch.cat([outputs, saccade_sense], dim=-1)
-        prediction_cue = self.predict_sensory(prediction_cue)
-        prediction_cue = prediction_cue.reshape(view.size(0), -1, self.conv_outh, self.conv_outw)
-        patches = self.cnn_predictive(prediction_cue) # deconv so we can apply loss
-        return patches, cnn_view, hidden_state
+        rnn_view, hidden_state = self.rnn(sense, hidden_state) # T x B x H
+        # self._predict_at_location(outputs, saccade_sense)
+        return cnn_view, rnn_view, hidden_state
 
     def saccade_image(self, image):
         # * Weakly-supervised saccading sequence
@@ -157,9 +174,10 @@ class SaccadingRNN(pl.LightningModule):
         all_patches = []
         w_span, h_span = self.cfg.FOV_WIDTH // 2, self.cfg.FOV_HEIGHT // 2
         image = F.pad(image, (w_span, w_span, h_span, h_span)) # zero-pads edges
-        last_saccade = saccades[0]
+
         for saccade in saccades:
-            # Window
+            # Window selection. # TODO Joel this can probably be vectorized
+            # If anyone else knows how to do this please go ahead + cc: Joel.
             w_span, h_span = self.cfg.FOV_WIDTH // 2, self.cfg.FOV_HEIGHT // 2
             view = image[
                 ...,
@@ -167,21 +185,30 @@ class SaccadingRNN(pl.LightningModule):
                 saccade[1]: saccade[1] + 2 * h_span, # to account for padding
             ]
             all_views.append(view)
-            # Noise
-            noise = torch.randn(view.size(), device=self.device) * self.cfg.FOV_FALLOFF
-            view = view + noise * self.view_mask
-            if self.cfg.CLAMP_FOV:
-                view = torch.clamp(view, -1, 1)
-            if self.cfg.PROPRIOCEPTION_DELTA:
-                proprioception = saccade - last_saccade
-                last_saccade = saccade
+        all_views = torch.stack(all_views, 0) # T x B x C x H x W
+        noise = torch.randn(all_views.size(), device=self.device) * self.cfg.FOV_FALLOFF
+        all_views = all_views + noise * self.view_mask
+        if self.cfg.CLAMP_FOV:
+            all_views = torch.clamp(all_views, -1, 1)
+
+        if self.cfg.PROPRIOCEPTION_DELTA:
+            proprioception = saccades[1:] - saccades[:-1]
+            proprioception = torch.cat([
+                torch.zeros(2, dtype=torch.float, device=self.device), proprioception
+            ], dim=0)
+        else:
+            proprioception = saccades / torch.tensor(image.size()[-2:], device=self.device)
+
+        cnn_view, rnn_view, hidden_state = self(all_views, proprioception, hidden_state)
+        losses = []
+        for objective in self.cfg.OBJECTIVES:
+            if objective == 'next_step':
+                all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:])
+                loss = self.criterion(all_views[1:], all_patches)
             else:
-                proprioception = saccade / torch.tensor(image.size()[-2:], device=self.device)
-            # We're here right now.
-            patches, cnn_view, hidden_state = self(view, proprioception, hidden_state)
-            all_patches.append(patches)
-            # TODO get loss (the above is probably off by 1)
-        loss = self.criterion(torch.stack(all_views), torch.stack(all_patches))
+                raise NotImplementedError
+            losses.append(loss)
+        losses = torch.stack(losses).mean() # no tradeoff terms
         return loss, all_views, all_patches, hidden_state
 
     # Pytorch lightning API below

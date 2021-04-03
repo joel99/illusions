@@ -42,14 +42,23 @@ _C.MODEL.FOV_HEIGHT = 32
 _C.MODEL.CLAMP_FOV = True # Clamp FOV output to [-1, 1]
 _C.MODEL.SACCADE = 'walk'
 _C.MODEL.PROPRIOCEPTION_DELTA = False
+
+_C.MODEL.OBJECTIVES = ['next_step']
+# next_step: predict next view prior to seeing it
+# random: predict random views (Not implemented) - probably should support warmup period to see image.
+# autoencode: CNN (Not implemented)
+# predictive_coding: Predict error terms (Not implemented)
+# TODO Joel add more notes on whether view is noised or not
+
 # -----------------------------------------------------------------------------
 # Train Config
 # -----------------------------------------------------------------------------
 _C.TRAIN = CN()
 
 _C.TRAIN.BATCH_SIZE = 32
-_C.TRAIN.EPOCHS = 120
+_C.TRAIN.EPOCHS = 10
 _C.TRAIN.WEIGHT_DECAY = 0.0
+
 
 def get_cfg_defaults():
   """Get default LFADS config (yacs config node)."""
