@@ -24,18 +24,24 @@ _C.TASK = CN()
 _C.TASK.NAME = 'UNIFORMITY'
 
 _C.TASK.UNIFORMITY = CN()
-
+_C.TASK.CHANNELS = 3
 
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
+# * Note, many of these settings are untested.
 _C.MODEL = CN()
 _C.MODEL.TYPE = 'gru'
-_C.MODEL.HIDDEN_SIZE = 32
+_C.MODEL.CONV_CHANNELS = 32
+_C.MODEL.SENSORY_SIZE = 16 # input size to RNN
+_C.MODEL.HIDDEN_SIZE = 64 # power of 2 is convenient so we can reshape
 _C.MODEL.ADAPTATION_LAYER = False # Include adaptation or not.
-_C.MODEL.FOV_WIDTH = 32
+_C.MODEL.FOV_FALLOFF = 0.001 # Scale factor for noise strength as a function of distance to focus. Noise = FOV_FALLOFF * N(0, r^2)
+_C.MODEL.FOV_WIDTH = 32 # FOV in spanned pixels (not angles). Should be set such that noise roughly overwhelms signal at edge
 _C.MODEL.FOV_HEIGHT = 32
-
+_C.MODEL.CLAMP_FOV = True # Clamp FOV output to [-1, 1]
+_C.MODEL.SACCADE = 'walk'
+_C.MODEL.PROPRIOCEPTION_DELTA = False
 # -----------------------------------------------------------------------------
 # Train Config
 # -----------------------------------------------------------------------------

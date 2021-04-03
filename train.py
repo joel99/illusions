@@ -9,7 +9,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor
 
 from config.default import get_config
-from dataset import IllusionsDataset
+from dataset import UniformityDataset
 from model import SaccadingRNN
 
 def get_parser():
@@ -53,7 +53,11 @@ def run_exp(
     model = SaccadingRNN(config)
     print(model)
 
-    dataset = IllusionsDataset(config, split="train", dataset_root=f"./data/{config.TASK.NAME}")
+    if config.TASK.NAME == 'UNIFORMITY':
+        dataset = UniformityDataset(config, split="train")
+    else:
+        raise NotImplementedError
+
     length = len(dataset)
     train, val = random_split(
         dataset,
@@ -82,7 +86,11 @@ def run_exp(
     print("Train results")
     trainer.test(model, DataLoader(dataset, batch_size=64))
 
-    test_dataset = IllusionsDataset(config, split="test", dataset_root=f"./data/{config.TASK.NAME}")
+    if config.TASK.NAME == 'UNIFORMITY':
+        test_dataset = UniformityDataset(config, split="test")
+    else:
+        raise NotImplementedError
+
     print()
     print("Test results")
     trainer.test(model, DataLoader(test_dataset, batch_size=64))
