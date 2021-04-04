@@ -18,10 +18,12 @@ class UniformityDataset(Dataset):
         super().__init__()
         dataset_root = osp.join(dataset_root, split)
         self.all_paths = list(map(lambda x: osp.join(dataset_root, x), os.listdir(dataset_root)))
+        self.grayscale = config.TASK.CHANNELS == 1
 
-    @staticmethod
-    def preprocess(img):
-        img = F.resize(img, (128, 128))
+    def preprocess(self, img):
+        img = F.resize(img, (64, 64))
+        if self.grayscale:
+            img = F.to_grayscale(img)
         # * Note, uniformity images are encoded 0-1, ensure this is true in other datasets
         return F.to_tensor(img) - 0.5 # 0-center.
 
@@ -36,4 +38,4 @@ class UniformityDataset(Dataset):
 
     def __getitem__(self, index):
         img = Image.open(self.all_paths[index])
-        return UniformityDataset.preprocess(img)
+        return self.preprocess(img)

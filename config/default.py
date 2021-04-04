@@ -33,9 +33,10 @@ _C.TASK.CHANNELS = 3
 # * Note, many of these settings are untested.
 _C.MODEL = CN()
 _C.MODEL.TYPE = 'gru'
+_C.MODEL.ACTIVATION = 'lrelu' # lrelu, relu
 _C.MODEL.CONV_CHANNELS = 32
-_C.MODEL.SENSORY_SIZE = 16 # input size to RNN
-_C.MODEL.HIDDEN_SIZE = 64 # power of 2 is convenient so we can reshape
+_C.MODEL.SENSORY_SIZE = 64 # input size to RNN
+_C.MODEL.HIDDEN_SIZE = 128
 _C.MODEL.ADAPTATION_LAYER = False # Include adaptation or not.
 _C.MODEL.FOV_FALLOFF = 0.001 # Scale factor for noise strength as a function of distance to focus. Noise = FOV_FALLOFF * N(0, r^2)
 _C.MODEL.FOV_WIDTH = 32 # FOV in spanned pixels (not angles). Should be set such that noise roughly overwhelms signal at edge
@@ -43,8 +44,10 @@ _C.MODEL.FOV_HEIGHT = 32
 _C.MODEL.CLAMP_FOV = True # Clamp FOV output to [-1, 1]
 _C.MODEL.SACCADE = 'walk'
 _C.MODEL.PROPRIOCEPTION_DELTA = False
-_C.MODEL.OBJECTIVES = ['autoencode', 'next_step']
 _C.MODEL.UPSAMPLE_CONV = True
+_C.MODEL.INCLUDE_PROPRIO = True # debug option to flag all proprioceptive inputs (vision-only model)
+_C.MODEL.REACTIVE = False # debug option to turn off RNN. Assumes include_proprio.
+_C.MODEL.OBJECTIVES = ['autoencode', 'next_step']
 # next_step: predict next view prior to seeing it (on RNN)
 # random: predict random views (Not implemented) - probably should support warmup period to see image.
 # autoencode: predict current state well (on RNN)
@@ -57,7 +60,7 @@ _C.MODEL.NOISED_SIGNAL = False # Whether to use noised patches for supervision (
 # -----------------------------------------------------------------------------
 _C.TRAIN = CN()
 
-_C.TRAIN.BATCH_SIZE = 32
+_C.TRAIN.BATCH_SIZE = 64 # 32-64 are approx same results
 _C.TRAIN.EPOCHS = 10
 _C.TRAIN.WEIGHT_DECAY = 0.0
 

@@ -27,56 +27,75 @@ class SaccadingRNN(pl.LightningModule):
         super().__init__()
         self.adaptation = None # TODO Taylor implement
         conv_dim = self.cfg.CONV_CHANNELS
-        self.conv_outw = 4 # Manually checked
-        self.conv_outh = 4
-        # 3 layer CNN
+        # self.conv_outw = self.conv_outh = 4 # Manually checked
+        self.conv_outw = self.conv_outh = 1 # Manually checked
+
+        def gen_activation():
+            return nn.ReLU() if self.cfg.ACTIVATION is 'relu' else nn.LeakyReLU(0.05)
         self.cnn_sensory = nn.Sequential(
-            conv(config.TASK.CHANNELS, conv_dim, 4),
-            nn.LeakyReLU(0.05),
+            conv(config.TASK.CHANNELS, conv_dim, 8),
+            gen_activation(),
+            conv(conv_dim, conv_dim, 4),
+            gen_activation(),
             conv(conv_dim, conv_dim * 2, 4),
-            nn.LeakyReLU(0.05),
+            gen_activation(),
             conv(conv_dim * 2, conv_dim, 4),
-            nn.LeakyReLU(0.05),
+            gen_activation(),
         )
+
+        # we still init if self.cfg.REACTIVE, just don't use.
+        if self.cfg.INCLUDE_PROPRIO:
+            flat_cnn_out = self.cfg.SENSORY_SIZE - PROPRIOCEPTION_SIZE
+        else:
+            flat_cnn_out = self.cfg.SENSORY_SIZE
         self.flatten_sensory = nn.Sequential(
             nn.Flatten(start_dim=-3),
-            nn.Linear(conv_dim * self.conv_outh * self.conv_outw, self.cfg.SENSORY_SIZE - PROPRIOCEPTION_SIZE),
+            nn.Linear(conv_dim * self.conv_outh * self.conv_outw, flat_cnn_out),
         )
 
         # This asymmetry is fairly arbitrary. It feels like it'll take more than a
         # linear layer to incorporate the propioceptive cue.
+        if self.cfg.INCLUDE_PROPRIO:
+            flat_cnn_in = self.cfg.HIDDEN_SIZE + PROPRIOCEPTION_SIZE
+        else:
+            flat_cnn_in = self.cfg.HIDDEN_SIZE
         self.predict_sensory = nn.Sequential(
-            nn.Linear(self.cfg.HIDDEN_SIZE + PROPRIOCEPTION_SIZE, self.cfg.HIDDEN_SIZE),
-            nn.ReLU(),
-            nn.Linear(self.cfg.HIDDEN_SIZE, self.conv_outh * self.conv_outw),nn.Unflatten(-1, (self.conv_outh, self.conv_outw))
+            nn.Linear(flat_cnn_in, self.cfg.HIDDEN_SIZE),
+            gen_activation(),
+            nn.Linear(self.cfg.HIDDEN_SIZE, self.conv_outh * self.conv_outw * conv_dim),nn.Unflatten(-1, (conv_dim, self.conv_outh, self.conv_outw))
         )
         self.rnn = nn.GRU(self.cfg.SENSORY_SIZE, self.cfg.HIDDEN_SIZE, 1)
+
         if self.cfg.UPSAMPLE_CONV:
             self.cnn_predictive = nn.Sequential(
-                upsample_conv(1, conv_dim * 2, 2),
-                nn.LeakyReLU(0.05),
+                upsample_conv(conv_dim, conv_dim * 2, 2),
+                gen_activation(),
                 upsample_conv(conv_dim * 2, conv_dim, 2),
-                nn.LeakyReLU(0.05),
-                upsample_conv(conv_dim, config.TASK.CHANNELS, 2),
+                gen_activation(),
+                upsample_conv(conv_dim, conv_dim, 2),
+                gen_activation(),
+                upsample_conv(conv_dim, config.TASK.CHANNELS, 4),
                 nn.Tanh()
             )
         else:
             self.cnn_predictive = nn.Sequential(
-                deconv(1, conv_dim * 2, 4),
-                nn.LeakyReLU(0.05),
+                deconv(conv_dim, conv_dim * 2, 4),
+                gen_activation(),
                 deconv(conv_dim * 2, conv_dim, 4),
-                nn.LeakyReLU(0.05),
+                gen_activation(),
+                deconv(conv_dim, conv_dim, 4),
+                gen_activation(),
                 deconv(conv_dim, config.TASK.CHANNELS, 4),
                 nn.Tanh()
             )
-        self.criterion = nn.MSELoss() # TODO can we improve on MSE?
+        self.criterion = nn.MSELoss()
         self.weight_decay = config.TRAIN.WEIGHT_DECAY
         self.saccade_training_mode = self.cfg.SACCADE
         self.view_mask = self._generate_falloff_mask()
 
     def _generate_saccades(self, image, length=50, mode=None) -> torch.tensor:
         # Generate a sequence of saccading focal coordinates.
-        # * Does not provide margin, i.e. coordinates can be on corner of image. TBD whether this should change
+        # * Does not provide margin, i.e. coordinates can be on corner of image.
         # * We allow this so model can observe corner accurately.
         # args:
         #   image: [* x H x W]. image or image batch to saccade over.
@@ -136,14 +155,17 @@ class SaccadingRNN(pl.LightningModule):
         Returns:
             patches: [B x C x H x W] predicted patches at given locations
         """
-        prediction_cue = torch.cat([
-            state, focus.unsqueeze(1).expand(-1, state.size(1), 2)
-        ], dim=-1)
+        import pdb; pdb.set_trace()
+        prediction_cue = state
+        if self.cfg.INCLUDE_PROPRIO:
+            prediction_cue = torch.cat([
+                state, focus.unsqueeze(1).expand(-1, state.size(1), 2)
+            ], dim=-1)
+        # T x B x Hidden -> T x B x C x H x W
         prediction_cue = self.predict_sensory(prediction_cue)
-        # T x B x Hidden -> [T x B] x 1 (C) x H x W
-        prediction_cue = prediction_cue.flatten(0, 1).unsqueeze(1)
-        cnn_patches = self.cnn_predictive(prediction_cue)
-        return cnn_patches.unflatten(0, (state.size(0), state.size(1)))
+        return self.cnn_predictive(prediction_cue.flatten(0, 1)).unflatten(
+            0, (state.size(0), state.size(1))
+        )
 
     def forward(self, view, saccade_focus, hidden_state):
         r"""
@@ -161,16 +183,17 @@ class SaccadingRNN(pl.LightningModule):
         """
         if self.adaptation is not None:
             view = self.adaptation(view)
-        # reshape so CNN can support time dimension
-        cnn_view = self.cnn_sensory(view.flatten(0, 1))
-        flat_view = self.flatten_sensory(cnn_view) # [T x B] x Hidden
-        flat_view = flat_view.view(view.size(0), view.size(1), -1) # T x B x Hidden
-        saccade_sense = saccade_focus.unsqueeze(1).expand(
-            -1, flat_view.size(1), -1
-        ) # T x B x 2
-        sense = torch.cat([flat_view, saccade_sense], dim=-1)
+
+        cnn_view = self.cnn_sensory(view.flatten(0, 1)).unflatten(
+            0, (view.size(0), view.size(1)) # T x B x C x H x W
+        )
+        sense = self.flatten_sensory(cnn_view) # T x B x Hidden
+        if self.cfg.INCLUDE_PROPRIO:
+            saccade_sense = saccade_focus.unsqueeze(1).expand(
+                -1, view.size(1), -1
+            ) # T x B x 2
+            sense = torch.cat([sense, saccade_sense], dim=-1)
         rnn_view, hidden_state = self.rnn(sense, hidden_state) # T x B x H
-        # self._predict_at_location(outputs, saccade_sense)
         return cnn_view, rnn_view, hidden_state
 
     def saccade_image(
@@ -201,21 +224,24 @@ class SaccadingRNN(pl.LightningModule):
             hidden_state = torch.zeros((1, image.size(0), self.cfg.HIDDEN_SIZE), device=self.device)
         else:
             hidden_state = initial_state
+
+        # 1. Generate observations
         saccades = self._generate_saccades(image, length=length, mode=mode)
         all_views = [] # raw and noised.
         all_patches = []
         w_span, h_span = self.cfg.FOV_WIDTH // 2, self.cfg.FOV_HEIGHT // 2
-        image = F.pad(image, (w_span, w_span, h_span, h_span)) # zero-pads edges
 
+        # 1a. Window selection.
+        # TODO Joel this can probably be vectorized
+        # If anyone else knows how to do this please go ahead + cc: Joel.
+        padded_image = F.pad(image, (w_span, w_span, h_span, h_span))
         for saccade in saccades:
-            # Window selection. # TODO Joel this can probably be vectorized
-            # If anyone else knows how to do this please go ahead + cc: Joel.
             w_span, h_span = self.cfg.FOV_WIDTH // 2, self.cfg.FOV_HEIGHT // 2
-            view = image[
+            view = padded_image[
                 ...,
                 saccade[0]: saccade[0] + 2 * w_span, # centered around saccade + span
                 saccade[1]: saccade[1] + 2 * h_span, # to account for padding
-            ]
+            ].clone() # ! just in case TODO remove
             all_views.append(view)
         all_views = torch.stack(all_views, 0) # T x B x C x H x W
         noise = torch.randn(all_views.size(), device=self.device) * self.cfg.FOV_FALLOFF
@@ -223,14 +249,16 @@ class SaccadingRNN(pl.LightningModule):
         if self.cfg.CLAMP_FOV:
             noised_views = torch.clamp(noised_views, -1, 1) # this bound is pretty aribtrary
 
+        # 2. Generate proprioception
         if self.cfg.PROPRIOCEPTION_DELTA:
-            proprioception = saccades[1:] - saccades[:-1]
+            proprioception = (saccades[1:] - saccades[:-1]).float()
             proprioception = torch.cat([
                 torch.zeros(2, dtype=torch.float, device=self.device), proprioception
             ], dim=0)
         else:
-            proprioception = saccades / torch.tensor(image.size()[-2:], device=self.device) - 0.5 # 0 center
+            proprioception = saccades.float() / torch.tensor(image.size()[-2:], device=self.device).float() - 0.5 # 0 center
 
+        # 3. Forward and calculate loss
         cnn_view, rnn_view, hidden_state = self(noised_views, proprioception, hidden_state)
         losses = []
         supervisory_view = noised_views if self.cfg.NOISED_SIGNAL else all_views
@@ -239,7 +267,10 @@ class SaccadingRNN(pl.LightningModule):
                 all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:])
                 loss = self.criterion(supervisory_view[1:], all_patches)
             elif objective == 'autoencode':
-                all_patches = self._predict_at_location(rnn_view, saccades) # Model must reproduce exactly what it saw.
+                if self.cfg.REACTIVE:
+                    all_patches = self.cnn_predictive(cnn_view.flatten(0, 1)).unflatten(0, (cnn_view.size(0), cnn_view.size(1)))
+                else:
+                    all_patches = self._predict_at_location(rnn_view, saccades) # Model must reproduce exactly what it saw.
                 loss = self.criterion(supervisory_view, all_patches)
             else:
                 # TODO Joel support other modes

@@ -4,6 +4,7 @@ from yacs.config import CfgNode as CN
 
 import torch
 from torch.utils.data import DataLoader, random_split
+# import torchvision
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor
@@ -13,7 +14,7 @@ from dataset import UniformityDataset
 from model import SaccadingRNN
 
 OVERFIT = False
-OVERFIT = True
+# OVERFIT = True
 
 def get_parser():
     parser = argparse.ArgumentParser()
@@ -58,9 +59,13 @@ def run_exp(
 
     if config.TASK.NAME == 'UNIFORMITY':
         dataset = UniformityDataset(config, split="train")
+    # elif config.TASK.NAME == 'CIFAR':
+    #     dataset = torchvision.datasets.CIFAR10(
+    #         root='./data',
+    #         transform=torchvision.transforms.Resize((64, 64))
+    #     )
     else:
         raise NotImplementedError
-
     length = len(dataset)
     train, val = random_split(
         dataset,
@@ -85,8 +90,8 @@ def run_exp(
 
     trainer.fit(
         model,
-        DataLoader(train, batch_size=config.TRAIN.BATCH_SIZE), # * Note, there's 2x the number of minibatches that I expect, not sure why.
-        DataLoader(val, batch_size=config.TRAIN.BATCH_SIZE)
+        DataLoader(train, batch_size=config.TRAIN.BATCH_SIZE, num_workers=4),
+        DataLoader(val, batch_size=config.TRAIN.BATCH_SIZE, num_workers=4,)
     )
 
     print()

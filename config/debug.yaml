@@ -5,9 +5,7 @@ MODEL:
     SACCADE: 'constant' # apparently not relevant
     FOV_FALLOFF: 0.0 # make it easier -- apparently not relevant
     OBJECTIVES: ['autoencode'] # apparently not relevant (and next step doesn't seem much worse)
-    INCLUDE_PROPRIO: False
-
-    REACTIVE: False # MSE ~0.07, too high.
-    # REACTIVE: True # This gets to ~0.02 MSE which is ok
-TRAIN:
-    EPOCHS: 30
+    SENSORY_SIZE: 64
+    HIDDEN_SIZE: 64
+    # INCLUDE_PROPRIO: False
+    # REACTIVE: True
