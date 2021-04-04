@@ -22,6 +22,7 @@ _C.VARIANT = "test"
 # -----------------------------------------------------------------------------
 _C.TASK = CN()
 _C.TASK.NAME = 'UNIFORMITY'
+_C.TASK.OVERFIT = False # Debug
 
 _C.TASK.UNIFORMITY = CN()
 _C.TASK.CHANNELS = 3
@@ -42,12 +43,13 @@ _C.MODEL.FOV_HEIGHT = 32
 _C.MODEL.CLAMP_FOV = True # Clamp FOV output to [-1, 1]
 _C.MODEL.SACCADE = 'walk'
 _C.MODEL.PROPRIOCEPTION_DELTA = False
-
-_C.MODEL.OBJECTIVES = ['next_step']
-# next_step: predict next view prior to seeing it
+_C.MODEL.OBJECTIVES = ['autoencode', 'next_step']
+_C.MODEL.UPSAMPLE_CONV = True
+# next_step: predict next view prior to seeing it (on RNN)
 # random: predict random views (Not implemented) - probably should support warmup period to see image.
-# autoencode: CNN (Not implemented)
-# predictive_coding: Predict error terms (Not implemented)
+# autoencode: predict current state well (on RNN)
+# predictive_coding: Predict error terms (on RNN, Not implemented)
+_C.MODEL.NOISED_SIGNAL = False # Whether to use noised patches for supervision (True seems more plausible, and is likely harder)
 # TODO Joel add more notes on whether view is noised or not
 
 # -----------------------------------------------------------------------------

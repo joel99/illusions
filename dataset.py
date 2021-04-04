@@ -25,6 +25,12 @@ class UniformityDataset(Dataset):
         # * Note, uniformity images are encoded 0-1, ensure this is true in other datasets
         return F.to_tensor(img) - 0.5 # 0-center.
 
+    @staticmethod
+    def unpreprocess(view):
+        # For viz
+        # * Note, uniformity images are encoded 0-1, ensure this is true in other datasets
+        return torch.clamp(view + 0.5, 0, 1) # 0 - 1
+
     def __len__(self):
         return len(self.all_paths)
 

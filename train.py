@@ -12,6 +12,9 @@ from config.default import get_config
 from dataset import UniformityDataset
 from model import SaccadingRNN
 
+OVERFIT = False
+OVERFIT = True
+
 def get_parser():
     parser = argparse.ArgumentParser()
 
@@ -68,12 +71,16 @@ def run_exp(
 
     lr_logger = LearningRateMonitor(logging_interval='step')
 
+    epochs = config.TRAIN.EPOCHS
+    if OVERFIT:
+        epochs *= 10
     trainer = pl.Trainer(
-        max_epochs=config.TRAIN.EPOCHS,
+        max_epochs=epochs,
         gpus=1,
         val_check_interval=1.0,
         callbacks=[lr_logger],
-        default_root_dir=f"./runs/{config.VARIANT}-{config.SEED}"
+        default_root_dir=f"./runs/{config.VARIANT}-{config.SEED}",
+        overfit_batches=10 if OVERFIT else 0
     )
 
     trainer.fit(

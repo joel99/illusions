@@ -1,5 +1,5 @@
 # Model definition
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from yacs.config import CfgNode as CN
 
 import torch
@@ -51,14 +51,24 @@ class SaccadingRNN(pl.LightningModule):
             nn.Linear(self.cfg.HIDDEN_SIZE, self.conv_outh * self.conv_outw),nn.Unflatten(-1, (self.conv_outh, self.conv_outw))
         )
         self.rnn = nn.GRU(self.cfg.SENSORY_SIZE, self.cfg.HIDDEN_SIZE, 1)
-        self.cnn_predictive = nn.Sequential(
-            deconv(1, conv_dim * 2, 4),
-            nn.LeakyReLU(0.05),
-            deconv(conv_dim * 2, conv_dim, 4),
-            nn.LeakyReLU(0.05),
-            deconv(conv_dim, config.TASK.CHANNELS, 4),
-            nn.Tanh()
-        )
+        if self.cfg.UPSAMPLE_CONV:
+            self.cnn_predictive = nn.Sequential(
+                upsample_conv(1, conv_dim * 2, 2),
+                nn.LeakyReLU(0.05),
+                upsample_conv(conv_dim * 2, conv_dim, 2),
+                nn.LeakyReLU(0.05),
+                upsample_conv(conv_dim, config.TASK.CHANNELS, 2),
+                nn.Tanh()
+            )
+        else:
+            self.cnn_predictive = nn.Sequential(
+                deconv(1, conv_dim * 2, 4),
+                nn.LeakyReLU(0.05),
+                deconv(conv_dim * 2, conv_dim, 4),
+                nn.LeakyReLU(0.05),
+                deconv(conv_dim, config.TASK.CHANNELS, 4),
+                nn.Tanh()
+            )
         self.criterion = nn.MSELoss() # TODO can we improve on MSE?
         self.weight_decay = config.TRAIN.WEIGHT_DECAY
         self.saccade_training_mode = self.cfg.SACCADE
@@ -98,6 +108,8 @@ class SaccadingRNN(pl.LightningModule):
             # TODO Chris - calculate an appropriately calibrated fixation radius based on human measurements (at level of saccadic drift)
             deltas = torch.randn((length, 2), device=self.device) * DRIFT
             coords_ratio = (start + deltas) * torch.tensor
+        elif mode == 'constant':
+            coords_ratio = torch.full((length, 2), 0.5, device=self.device)
         coords_ratio = torch.clamp(coords_ratio, 0, 1)
         image_scale = torch.tensor([H, W], device=self.device).float()
         return (coords_ratio * image_scale).long()
@@ -161,16 +173,36 @@ class SaccadingRNN(pl.LightningModule):
         # self._predict_at_location(outputs, saccade_sense)
         return cnn_view, rnn_view, hidden_state
 
-    def saccade_image(self, image):
-        # * Weakly-supervised saccading sequence
-        # TODO Joel support other modes
-        # args:
-        #   image: [B x C x H x W]
+    def saccade_image(
+        self,
+        image,
+        length=50,
+        mode=None,
+        initial_state: Optional[torch.tensor]=None,
+    ):
+        r"""
+            General purpose saccading saccading sequence.
+            Returns will vary based on saccading mode.
+
+            Args:
+                image: [B x C x H x W] Image batch to saccade over
+                length: length of saccade
+                mode: saccading mode (see `_generate_saccades`)
+                initial_state: [B x H] Initial state for memory
+            Returns:
+                loss
+                views: [T x B x C x H x W] (model observations)
+                patches: [T x B x C x H x W] (model percepts).
+                hidden_state: [B x H] (model memory at conclusion)
+        """
         self.view_mask = self.view_mask.to(self.device) # ! weird, we can't set it in __init__()
 
-        hidden_state = torch.zeros((1, image.size(0), self.cfg.HIDDEN_SIZE), device=self.device) # Init
-        saccades = self._generate_saccades(image)
-        all_views = [] # raw and unnoised. # TODO Joel consider whether we should be predicting noised images.
+        if initial_state is None:
+            hidden_state = torch.zeros((1, image.size(0), self.cfg.HIDDEN_SIZE), device=self.device)
+        else:
+            hidden_state = initial_state
+        saccades = self._generate_saccades(image, length=length, mode=mode)
+        all_views = [] # raw and noised.
         all_patches = []
         w_span, h_span = self.cfg.FOV_WIDTH // 2, self.cfg.FOV_HEIGHT // 2
         image = F.pad(image, (w_span, w_span, h_span, h_span)) # zero-pads edges
@@ -187,9 +219,9 @@ class SaccadingRNN(pl.LightningModule):
             all_views.append(view)
         all_views = torch.stack(all_views, 0) # T x B x C x H x W
         noise = torch.randn(all_views.size(), device=self.device) * self.cfg.FOV_FALLOFF
-        all_views = all_views + noise * self.view_mask
+        noised_views = all_views + noise * self.view_mask
         if self.cfg.CLAMP_FOV:
-            all_views = torch.clamp(all_views, -1, 1)
+            noised_views = torch.clamp(noised_views, -1, 1) # this bound is pretty aribtrary
 
         if self.cfg.PROPRIOCEPTION_DELTA:
             proprioception = saccades[1:] - saccades[:-1]
@@ -197,25 +229,46 @@ class SaccadingRNN(pl.LightningModule):
                 torch.zeros(2, dtype=torch.float, device=self.device), proprioception
             ], dim=0)
         else:
-            proprioception = saccades / torch.tensor(image.size()[-2:], device=self.device)
+            proprioception = saccades / torch.tensor(image.size()[-2:], device=self.device) - 0.5 # 0 center
 
-        cnn_view, rnn_view, hidden_state = self(all_views, proprioception, hidden_state)
+        cnn_view, rnn_view, hidden_state = self(noised_views, proprioception, hidden_state)
         losses = []
+        supervisory_view = noised_views if self.cfg.NOISED_SIGNAL else all_views
         for objective in self.cfg.OBJECTIVES:
             if objective == 'next_step':
                 all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:])
-                loss = self.criterion(all_views[1:], all_patches)
+                loss = self.criterion(supervisory_view[1:], all_patches)
+            elif objective == 'autoencode':
+                all_patches = self._predict_at_location(rnn_view, saccades) # Model must reproduce exactly what it saw.
+                loss = self.criterion(supervisory_view, all_patches)
             else:
+                # TODO Joel support other modes
                 raise NotImplementedError
             losses.append(loss)
-        losses = torch.stack(losses).mean() # no tradeoff terms
-        return loss, all_views, all_patches, hidden_state
+        loss = torch.stack(losses).sum() # no tradeoff terms
+
+        # TODO how do we decide what patches to return?
+        # Currently it'll return the last objective's patches
+        return loss, all_views, noised_views, all_patches, hidden_state
 
     # Pytorch lightning API below
+    # TODO systematic prediction to get a "full image" percept.
+    # Problem is that we don't train in any systematic matter
+    # So grid-based reconstruction is probably not exactly accurate.
 
     def predict(self, image):
-        # arg: image - H x W
-        pass
+        r"""
+            Will take the image, saccade randomly over it, and then make predictions (on a different random saccade sequence).
+            Args:
+                image: C x H x W.
+        """
+        with torch.no_grad():
+            loss, all_views, noised_views, all_patches, state = self.saccade_image(image.unsqueeze(0))
+            print('Initial saccade:', loss)
+            loss, all_views, noised_views, all_patches, state = \
+                self.saccade_image(image.unsqueeze(0), initial_state=state)
+            print('Next saccade:', loss)
+        return all_views, noised_views, all_patches, state
 
     def training_step(self, batch, batch_idx):
         # batch - B x H x W
@@ -229,7 +282,7 @@ class SaccadingRNN(pl.LightningModule):
         return loss
 
     def test_step(self, batch, batch_idx):
-        loss, all_views, all_patches, hidden_state = self.saccade_image(batch)
+        loss, *_ = self.saccade_image(batch)
         self.log('test_loss', loss, prog_bar=True)
         # TODO probably want to log down images as well
         return loss
@@ -242,6 +295,13 @@ class SaccadingRNN(pl.LightningModule):
             'lr_scheduler': optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=50),
             'monitor': 'val_loss'
         }
+
+def upsample_conv(c_in, c_out, scale_factor, k_size=3, stride=1, pad=1, bn=True):
+    return nn.Sequential(
+        nn.Upsample(scale_factor=scale_factor),
+        nn.Conv2d(c_in, c_out, k_size, stride, pad, bias=False),
+        nn.BatchNorm2d(c_out)
+    )
 
 def deconv(c_in, c_out, k_size, stride=2, pad=1, bn=True):
     """Custom deconvolutional layer for simplicity."""
