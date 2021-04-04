@@ -13,10 +13,10 @@ from dataset import UniformityDataset
 # We need to grab the checkpoint, and its corresponding config.
 # TODO figure out how to store the config in checkpoint and just load checkpoints
 config = './config/base.yaml'
-config = './config/debug.yaml'
+# config = './config/debug.yaml'
+config = './config/debug2.yaml'
+config = './config/base.yaml'
 
-variant = osp.split(config)[1].split('.')[0]
-config = get_config(config)
 seed = 0
 version = 10
 version = 12
@@ -30,8 +30,15 @@ version = 43
 version = 48
 version = 49
 version = 50
-
+version = 57
 version = 0
+version = 58
+version = 59
+version = 63
+version = 70
+variant = osp.split(config)[1].split('.')[0]
+config = get_config(config)
+
 root = Path(f'runs/{variant}-{seed}/lightning_logs/')
 # # * This is the default output, if you want to play around with a different checkpoint load it here.
 model_ckpt = list(root.joinpath(f"version_{version}").joinpath('checkpoints').glob("*"))[0]
@@ -46,7 +53,7 @@ dataset = UniformityDataset(config, split="train")
 image = dataset[0]
 image = dataset[1]
 # image = dataset[2]
-# image = dataset[3]
+image = dataset[3]
 print(dataset.all_paths[0])
 print(image.size())
 proc_view = UniformityDataset.unpreprocess(image).permute(1, 2, 0)
@@ -55,7 +62,6 @@ plt.imshow(proc_view)
 
 all_views, noised_views, patches, state = model.predict(image)
 
-#%%
 # Hm, doesn't seem to matter.... am I looking at the right output?
 # Why is my loss higher than reported?
 
@@ -69,17 +75,17 @@ print(loss1)
 
 #%%
 # It don't even look like the right image.
-times = [0, 1, 2]
+times = [0, 1, 5, 6]
 f, axes = plt.subplots(len(times), 2, sharex=True, sharey=True)
 for i, t in enumerate(times):
-    true_image = all_views[t, 0]
+    true_image = noised_views[t, 0]
+    # true_image = all_views[t, 0]
     # true_image = all_views[t + 1, 0]
     proc_true = UniformityDataset.unpreprocess(true_image).permute(1, 2, 0)
     proc_true = proc_true.squeeze(-1)
 
     # axes[i, 0].imshow(proc_true[..., 2])
     axes[i, 0].imshow(proc_true)
-
     pred_image = patches[t, 0]
     proc_pred = UniformityDataset.unpreprocess(pred_image).permute(1, 2, 0)
     proc_pred = proc_pred.squeeze(-1)

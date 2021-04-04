@@ -2,10 +2,10 @@ TASK:
     NAME: 'UNIFORMITY'
     CHANNELS: 1
 MODEL:
-    SACCADE: 'constant' # apparently not relevant
-    FOV_FALLOFF: 0.0 # make it easier -- apparently not relevant
+    SACCADE: 'walk' # Testing this
     OBJECTIVES: ['autoencode'] # apparently not relevant (and next step doesn't seem much worse)
-    SENSORY_SIZE: 64
-    HIDDEN_SIZE: 64
-    # INCLUDE_PROPRIO: False
-    # REACTIVE: True
+    HIDDEN_SIZE: 128
+    PROPRIOCEPTION_DELTA: True
+    # NOISED_SIGNAL: True # TODO
+TRAIN:
+    EPOCHS: 30

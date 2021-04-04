@@ -23,7 +23,7 @@ class SaccadingRNN(pl.LightningModule):
     ):
         self.cfg = config.MODEL
         assert self.cfg.TYPE is 'gru', 'non-gru rnns unsupported'
-        assert self.cfg.ADAPTATION_LAYER is False, 'adaptation not supported (yet)' # TODO implement
+        assert self.cfg.ADAPTATION_LAYER is False, 'adaptation not supported (yet)' # TODO Taylor implement
         super().__init__()
         self.adaptation = None # TODO Taylor implement
         conv_dim = self.cfg.CONV_CHANNELS
@@ -59,6 +59,10 @@ class SaccadingRNN(pl.LightningModule):
             flat_cnn_in = self.cfg.HIDDEN_SIZE + PROPRIOCEPTION_SIZE
         else:
             flat_cnn_in = self.cfg.HIDDEN_SIZE
+
+        if 'predictive' in self.cfg.OBJECTIVES:
+            self.predictive_map = nn.Linear(flat_cnn_in, flat_cnn_out)
+
         self.predict_sensory = nn.Sequential(
             nn.Linear(flat_cnn_in, self.cfg.HIDDEN_SIZE),
             gen_activation(),
@@ -66,6 +70,7 @@ class SaccadingRNN(pl.LightningModule):
         )
         self.rnn = nn.GRU(self.cfg.SENSORY_SIZE, self.cfg.HIDDEN_SIZE, 1)
 
+        predictive_output = config.TASK.CHANNELS if self.cfg.QUANTIZED_RECONSTRUCTION <= 1 else self.cfg.QUANTIZED_RECONSTRUCTION
         if self.cfg.UPSAMPLE_CONV:
             self.cnn_predictive = nn.Sequential(
                 upsample_conv(conv_dim, conv_dim * 2, 2),
@@ -74,7 +79,7 @@ class SaccadingRNN(pl.LightningModule):
                 gen_activation(),
                 upsample_conv(conv_dim, conv_dim, 2),
                 gen_activation(),
-                upsample_conv(conv_dim, config.TASK.CHANNELS, 4),
+                upsample_conv(conv_dim, predictive_output, 4),
                 nn.Tanh()
             )
         else:
@@ -85,13 +90,35 @@ class SaccadingRNN(pl.LightningModule):
                 gen_activation(),
                 deconv(conv_dim, conv_dim, 4),
                 gen_activation(),
-                deconv(conv_dim, config.TASK.CHANNELS, 4),
+                deconv(conv_dim, predictive_output, 4),
                 nn.Tanh()
             )
-        self.criterion = nn.MSELoss()
+        self.mse = nn.MSELoss()
+        self.xent = nn.CrossEntropyLoss()
         self.weight_decay = config.TRAIN.WEIGHT_DECAY
         self.saccade_training_mode = self.cfg.SACCADE
         self.view_mask = self._generate_falloff_mask()
+
+    def _evaluate_image_pred(self, gt, pred):
+        # Note: the actual quantization scheme was proposed in a more sophisticated way (ref: https://github.com/richzhang/colorization/tree/caffe)
+        # Doing this for simplicity
+        # gt: T B C H W
+        if self.cfg.QUANTIZED_RECONSTRUCTION <= 1:
+            return self.mse(pred, gt)
+        # Expecting GT to vary [-0.5, 0.5]
+        quantized_gt = ((gt + 0.5) * (self.cfg.QUANTIZED_RECONSTRUCTION - 1)).long().flatten(0, 2)
+        return self.xent(pred.flatten(0, 1), quantized_gt)
+
+    def _quantized_pred(self, pred):
+        if self.cfg.QUANTIZED_RECONSTRUCTION <= 1:
+            return pred
+        # Expecting GT to vary [-0.5, 0.5]
+        with torch.no_grad():
+            quantized_pred = torch.argmax(pred, dim=2).float() # T B H W varying 0 - 7
+            quantized_pred = quantized_pred / (self.cfg.QUANTIZED_RECONSTRUCTION - 1) # asymmetry is nervewracking
+            BIN_SPAN = 0.5 / self.cfg.QUANTIZED_RECONSTRUCTION
+            quantized_pred = quantized_pred - 0.5 + BIN_SPAN # T B H W
+            return quantized_pred.unsqueeze(-3) # T B C H W
 
     def _generate_saccades(self, image, length=50, mode=None) -> torch.tensor:
         # Generate a sequence of saccading focal coordinates.
@@ -147,25 +174,29 @@ class SaccadingRNN(pl.LightningModule):
                 mask[h,w] = (h - center_h) ** 2 + (w - center_w) ** 2
         return mask
 
-    def _predict_at_location(self, state, focus):
+    def _predict_at_location(self, state, focus, mode='patch'):
         r"""
         Args:
             state: [T x B x H] memory to make prediction with
-            focus: [T x 2] location to predict at
+            focus: [T x 2] location to predict at (given as absolute ratio)
+            mode: 'patch' for pixel reconstruction or 'percept' for CNN reconstruction
         Returns:
             patches: [B x C x H x W] predicted patches at given locations
         """
-        import pdb; pdb.set_trace()
-        prediction_cue = state
+        # import pdb; pdb.set_trace()
         if self.cfg.INCLUDE_PROPRIO:
-            prediction_cue = torch.cat([
+            state = torch.cat([
                 state, focus.unsqueeze(1).expand(-1, state.size(1), 2)
             ], dim=-1)
-        # T x B x Hidden -> T x B x C x H x W
-        prediction_cue = self.predict_sensory(prediction_cue)
-        return self.cnn_predictive(prediction_cue.flatten(0, 1)).unflatten(
-            0, (state.size(0), state.size(1))
-        )
+
+        if mode == 'patch':
+            # T x B x Hidden -> T x B x C x H x W
+            prediction_cue = self.predict_sensory(state)
+            return self.cnn_predictive(prediction_cue.flatten(0, 1)).unflatten(
+                0, (state.size(0), state.size(1))
+            )
+        else:
+            return self.predictive_map(state) # Only do the linear transform
 
     def forward(self, view, saccade_focus, hidden_state):
         r"""
@@ -187,14 +218,15 @@ class SaccadingRNN(pl.LightningModule):
         cnn_view = self.cnn_sensory(view.flatten(0, 1)).unflatten(
             0, (view.size(0), view.size(1)) # T x B x C x H x W
         )
-        sense = self.flatten_sensory(cnn_view) # T x B x Hidden
+        cnn_sense = self.flatten_sensory(cnn_view) # T x B x Hidden
+        sense = cnn_sense
         if self.cfg.INCLUDE_PROPRIO:
             saccade_sense = saccade_focus.unsqueeze(1).expand(
                 -1, view.size(1), -1
             ) # T x B x 2
-            sense = torch.cat([sense, saccade_sense], dim=-1)
+            sense = torch.cat([cnn_sense, saccade_sense], dim=-1)
         rnn_view, hidden_state = self.rnn(sense, hidden_state) # T x B x H
-        return cnn_view, rnn_view, hidden_state
+        return cnn_view, cnn_sense, rnn_view, hidden_state
 
     def saccade_image(
         self,
@@ -253,25 +285,32 @@ class SaccadingRNN(pl.LightningModule):
         if self.cfg.PROPRIOCEPTION_DELTA:
             proprioception = (saccades[1:] - saccades[:-1]).float()
             proprioception = torch.cat([
-                torch.zeros(2, dtype=torch.float, device=self.device), proprioception
+                torch.zeros((1,2), dtype=torch.float, device=self.device), proprioception
             ], dim=0)
         else:
             proprioception = saccades.float() / torch.tensor(image.size()[-2:], device=self.device).float() - 0.5 # 0 center
 
         # 3. Forward and calculate loss
-        cnn_view, rnn_view, hidden_state = self(noised_views, proprioception, hidden_state)
+        cnn_view, cnn_sense, rnn_view, hidden_state = self(noised_views, proprioception, hidden_state)
         losses = []
         supervisory_view = noised_views if self.cfg.NOISED_SIGNAL else all_views
         for objective in self.cfg.OBJECTIVES:
             if objective == 'next_step':
                 all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:])
-                loss = self.criterion(supervisory_view[1:], all_patches)
-            elif objective == 'autoencode':
+                loss = self._evaluate_image_pred(supervisory_view[1:], all_patches)
+            elif objective == 'autoencode': # this gets too blurry once we walk
                 if self.cfg.REACTIVE:
                     all_patches = self.cnn_predictive(cnn_view.flatten(0, 1)).unflatten(0, (cnn_view.size(0), cnn_view.size(1)))
                 else:
                     all_patches = self._predict_at_location(rnn_view, saccades) # Model must reproduce exactly what it saw.
-                loss = self.criterion(supervisory_view, all_patches)
+                loss = self._evaluate_image_pred(supervisory_view, all_patches)
+            elif objective == 'predictive':
+                # Each module predicts its input (implying autoencoding for CNN)
+                all_patches = self.cnn_predictive(cnn_view.flatten(0, 1)).unflatten(0, (cnn_view.size(0), cnn_view.size(1)))
+                loss_cnn = self._evaluate_image_pred(supervisory_view, all_patches)
+                cnn_predictions = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='percept')
+                loss_rnn = self.mse(cnn_sense[1:], cnn_predictions)
+                loss = loss_cnn + loss_rnn
             else:
                 # TODO Joel support other modes
                 raise NotImplementedError
@@ -299,6 +338,8 @@ class SaccadingRNN(pl.LightningModule):
             loss, all_views, noised_views, all_patches, state = \
                 self.saccade_image(image.unsqueeze(0), initial_state=state)
             print('Next saccade:', loss)
+        if self.cfg.QUANTIZED_RECONSTRUCTION:
+            all_patches = self._quantized_pred(all_patches)
         return all_views, noised_views, all_patches, state
 
     def training_step(self, batch, batch_idx):
