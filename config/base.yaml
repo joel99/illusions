@@ -3,8 +3,8 @@ TASK:
     CHANNELS: 1
 MODEL:
     SACCADE: 'walk'
-    OBJECTIVES: ['predictive'] # Most plausible.
-    # NOISED_SIGNAL: True # TODO
+    OBJECTIVES: ['predictive']
+    NOISED_SIGNAL: True
 
     HIDDEN_SIZE: 128
 

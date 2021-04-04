@@ -36,6 +36,10 @@ version = 58
 version = 59
 version = 63
 version = 70
+version = 72
+version = 73
+version = 84
+version = 85
 variant = osp.split(config)[1].split('.')[0]
 config = get_config(config)
 
@@ -52,15 +56,19 @@ dataset = UniformityDataset(config, split="train")
 #%%
 image = dataset[0]
 image = dataset[1]
-# image = dataset[2]
-image = dataset[3]
+image = dataset[2]
+# image = dataset[3]
 print(dataset.all_paths[0])
 print(image.size())
 proc_view = UniformityDataset.unpreprocess(image).permute(1, 2, 0)
 proc_view = proc_view.squeeze(-1)
 plt.imshow(proc_view)
 
-all_views, noised_views, patches, state = model.predict(image)
+saccades = model._generate_saccades(image)
+all_views, noised_views, patches, state = model.predict_with_saccades(image, saccades, mode='predictive_patch')
+# Note, simply using saccades twice in a row is OOD.
+
+# all_views, noised_views, patches, state = model.predict(image)
 
 # Hm, doesn't seem to matter.... am I looking at the right output?
 # Why is my loss higher than reported?

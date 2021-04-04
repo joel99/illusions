@@ -6,7 +6,7 @@ MODEL:
     OBJECTIVES: ['predictive_patch']
     NOISED_SIGNAL: True
 
-    HIDDEN_SIZE: 512
+    HIDDEN_SIZE: 128
 
 TRAIN:
     EPOCHS: 30

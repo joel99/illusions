@@ -49,12 +49,11 @@ _C.MODEL.INCLUDE_PROPRIO = True # debug option to flag all proprioceptive inputs
 _C.MODEL.REACTIVE = False # debug option to turn off RNN. Assumes include_proprio.
 _C.MODEL.QUANTIZED_RECONSTRUCTION = 0 # 0 - use MSE. N > 1 => quantize into N bins.
 _C.MODEL.OBJECTIVES = ['predictive']
-# next_step: predict next view prior to seeing it (on RNN)
+# predictive: Predict error terms (autoencode + percept prediction)
+# predictive_patch: predict next view prior to seeing it (on RNN)
 # random: predict random views (Not implemented) - probably should support warmup period to see image.
 # autoencode: predict current state well (on RNN)
-# predictive_coding: Predict error terms (on RNN, Not implemented)
-_C.MODEL.NOISED_SIGNAL = False # Whether to use noised patches for supervision (True seems more plausible, and is likely harder)
-# TODO Joel add more notes on whether view is noised or not
+_C.MODEL.NOISED_SIGNAL = True # Whether to use noised patches for supervision. True is self-supervised.
 
 # -----------------------------------------------------------------------------
 # Train Config
