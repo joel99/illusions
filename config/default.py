@@ -41,6 +41,7 @@ _C.MODEL.ADAPTATION_LAYER = False # Include adaptation or not.
 _C.MODEL.FOV_FALLOFF = 0.001 # Scale factor for noise strength as a function of distance to focus. Noise = FOV_FALLOFF * N(0, r^2)
 _C.MODEL.FOV_WIDTH = 32 # FOV in spanned pixels (not angles). Should be set such that noise roughly overwhelms signal at edge
 _C.MODEL.FOV_HEIGHT = 32
+_C.MODEL.TRANSITION_MLP = False
 _C.MODEL.CLAMP_FOV = True # Clamp FOV output to [-1, 1]
 _C.MODEL.SACCADE = 'walk'
 _C.MODEL.PROPRIOCEPTION_DELTA = False
@@ -53,6 +54,8 @@ _C.MODEL.OBJECTIVES = ['predictive']
 # predictive_patch: predict next view prior to seeing it (on RNN)
 # random: predict random views (Not implemented) - probably should support warmup period to see image.
 # autoencode: predict current state well (on RNN)
+# contrast: minibatch contrast, same image = positives. to improve image reprs.
+# * the problem is that we can't remember.
 _C.MODEL.NOISED_SIGNAL = True # Whether to use noised patches for supervision. True is self-supervised.
 
 # -----------------------------------------------------------------------------

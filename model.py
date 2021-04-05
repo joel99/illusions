@@ -49,23 +49,25 @@ class SaccadingRNN(pl.LightningModule):
             memory_input_size = self.cfg.SENSORY_SIZE - PROPRIOCEPTION_SIZE
         else:
             memory_input_size = self.cfg.SENSORY_SIZE
-        self.sensory_to_memory = nn.Linear(flat_cnn_out, memory_input_size)
+        if self.cfg.TRANSITION_MLP:
+            self.sensory_to_memory = nn.Sequential(
+                nn.Linear(flat_cnn_out, memory_input_size),
+                gen_activation(),
+                nn.Linear(memory_input_size, memory_input_size)
+            )
+        else:
+            self.sensory_to_memory = nn.Linear(flat_cnn_out, memory_input_size)
 
         if self.cfg.INCLUDE_PROPRIO:
             sensory_prediction_size = self.cfg.HIDDEN_SIZE + PROPRIOCEPTION_SIZE
         else:
             sensory_prediction_size = self.cfg.HIDDEN_SIZE
 
-        # TODO, memory can either predict CNN directly (we should implement this first)
-        # Or we can use an intermediate flat vector (TBD)
-        # if 'predictive' in self.cfg.OBJECTIVES:
-        #     self.sensory_to_memory = nn.Linear(flat_cnn_out, flat_cnn_in) # mock memory for reconstruction.
-
         # Extract cnn_view prediction from memory
         self.predict_sensory = nn.Sequential(
-            nn.Linear(sensory_prediction_size, self.cfg.HIDDEN_SIZE),
+            nn.Linear(sensory_prediction_size, self.cfg.SENSORY_SIZE),
             gen_activation(),
-            nn.Linear(self.cfg.HIDDEN_SIZE, flat_cnn_out),
+            nn.Linear(self.cfg.SENSORY_SIZE, flat_cnn_out),
             nn.Unflatten(-1, (conv_dim, self.conv_outh, self.conv_outw))
         )
         self.rnn = nn.GRU(self.cfg.SENSORY_SIZE, self.cfg.HIDDEN_SIZE, 1)
@@ -95,6 +97,14 @@ class SaccadingRNN(pl.LightningModule):
             )
         self.mse = nn.MSELoss()
         self.xent = nn.CrossEntropyLoss()
+
+        if 'contrast' in self.cfg.OBJECTIVES:
+            self.contrast = nn.Sequential(
+                nn.Linear(2 * memory_input_size, 16),
+                nn.ReLU(),
+                nn.Linear(16, 1)
+            )
+
         self.weight_decay = config.TRAIN.WEIGHT_DECAY
         self.saccade_training_mode = self.cfg.SACCADE
         self.view_mask = self._generate_falloff_mask()
@@ -227,7 +237,7 @@ class SaccadingRNN(pl.LightningModule):
             memory_input = torch.cat([memory_input, saccade_sense], dim=-1)
         rnn_view, hidden_state = self.rnn(memory_input, hidden_state) # T x B x H
 
-        return cnn_view, flat_cnn_view, rnn_view, hidden_state
+        return cnn_view, memory_input, rnn_view, hidden_state
 
     def get_views(self, image, saccades):
         all_views = [] # raw and noised.
@@ -297,7 +307,7 @@ class SaccadingRNN(pl.LightningModule):
         proprioception = self.get_proprioception(image, saccades)
 
         # Forward and calculate loss
-        cnn_view, flat_cnn_view, rnn_view, hidden_state = self(noised_views, proprioception, hidden_state)
+        cnn_view, memory_input, rnn_view, hidden_state = self(noised_views, proprioception, hidden_state)
         losses = []
         all_patches = []
         supervisory_view = noised_views if self.cfg.NOISED_SIGNAL else all_views
@@ -320,6 +330,25 @@ class SaccadingRNN(pl.LightningModule):
                 cnn_predictions = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='percept')
                 loss_rnn = self.mse(cnn_view[1:], cnn_predictions)
                 loss = loss_cnn + loss_rnn
+            elif objective == 'contrast':
+                raise NotImplementedError
+                # minibatch contrast of memory input T B H
+                # NUM_PAIRS = 8
+                # # TODO index random batches...
+                # time_pairs = torch.randint(0, memory_input.size(0), (NUM_PAIRS * 2)) #
+                # batch_negatives = torch.randint(0, memory_input.size(1), (NUM_PAIRS, 2))
+                # batch_positives = torch.randint(0, memory_input.size(1), (NUM_PAIRS, 1)).expand(NUM_PAIRS, 2)
+                # positives = torch.gather(
+                #     memory_input.flatten(0, 1),
+                #     dim=0,
+                #     index=time_pairs.expand_as(memory_input.size())
+                # ).reshape(NUM_PAIRS, 2 * memory_input.size(0), memory_input.size(1), memory_input.size(2)) # P x 2T x H
+                # #
+                # negatives = torch.gather(
+                #     positives.view(t * n, -1),
+                #     dim=0,
+                #     index=negative_inds.view(t * n, 1).expand(-1, positives.size(-1)),
+                # ).view(t, n, -1)
             elif objective == 'random':
                 raise NotImplementedError # TODO Joel
             else:
