@@ -163,7 +163,7 @@ class SaccadingRNN(pl.LightningModule):
             # TODO Chris - add config to control amount of drift
             # TODO Chris - calculate an appropriately calibrated fixation radius based on human measurements (at level of saccadic drift)
             deltas = torch.randn((length, 2), device=self.device) * DRIFT
-            coords_ratio = (start + deltas) * torch.tensor
+            coords_ratio = torch.tensor(start + deltas)
         elif mode == 'constant':
             coords_ratio = torch.full((length, 2), 0.5, device=self.device)
         coords_ratio = torch.clamp(coords_ratio, 0, 1)
@@ -418,6 +418,36 @@ class SaccadingRNN(pl.LightningModule):
                 cnn_view.flatten(0, 1)
             ).unflatten(0, (cnn_view.size(0), cnn_view.size(1)))
         return all_views, noised_views, all_patches, hidden_state
+
+    @torch.no_grad()
+    def predict_grid(
+        self,
+        image,
+        saccades, # preliminary saccade
+        initial_state=None,
+    ):
+        r"""
+            Finer control
+        """
+        image = image.unsqueeze(0)
+        all_patches = []
+
+        if initial_state is None:
+            hidden_state = torch.zeros((1, image.size(0), self.cfg.HIDDEN_SIZE), device=self.device)
+        else:
+            hidden_state = initial_state
+        # Generate observations
+        all_views, noised_views = self.get_views(image, saccades)
+        proprioception = self.get_proprioception(image, saccades)
+
+        cnn_view, flat_cnn_view, rnn_view, hidden_state = self(noised_views, proprioception, hidden_state)
+
+        # Use the final rnn state to make predictions about the whole grid.
+        # grid_h = np.linspace(0, image.size(-2), 4)
+        # grid_w = np.linspace(0, image.size(-1), 4)
+        all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='patch')
+        return all_views, noised_views, all_patches, hidden_state
+
 
     def training_step(self, batch, batch_idx):
         # batch - B x H x W

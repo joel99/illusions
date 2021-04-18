@@ -8,4 +8,5 @@ MODEL:
 
     HIDDEN_SIZE: 512
 TRAIN:
-    EPOCHS: 30
+    EPOCHS: 120
+    # EPOCHS: 30

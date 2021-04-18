@@ -2,3 +2,5 @@ data/
 lightning_logs/
 __pycache__/
 *.pyc
+*.pdf
+*.png
