@@ -90,8 +90,8 @@ def run_exp(
 
     trainer.fit(
         model,
-        DataLoader(train, batch_size=config.TRAIN.BATCH_SIZE, num_workers=4),
-        DataLoader(val, batch_size=config.TRAIN.BATCH_SIZE, num_workers=4,)
+        DataLoader(train, batch_size=config.TRAIN.BATCH_SIZE, num_workers=4, pin_memory=True),
+        DataLoader(val, batch_size=config.TRAIN.BATCH_SIZE, num_workers=4, pin_memory=True)
     )
 
     print()
@@ -105,7 +105,9 @@ def run_exp(
 
     print()
     print("Test results")
-    trainer.test(model, DataLoader(test_dataset, batch_size=64))
+    trainer.test(
+        model, DataLoader(test_dataset, batch_size=64, pin_memory=True)
+    )
 
 
 def main():

@@ -45,6 +45,7 @@ _C.MODEL.TRANSITION_MLP = False
 _C.MODEL.CLAMP_FOV = True # Clamp FOV output to [-1, 1]
 _C.MODEL.SACCADE = 'walk'
 _C.MODEL.PROPRIOCEPTION_DELTA = False
+_C.MODEL.FOURIER_PROPRIO = False
 _C.MODEL.UPSAMPLE_CONV = True
 _C.MODEL.INCLUDE_PROPRIO = True # debug option to flag all proprioceptive inputs (vision-only model)
 _C.MODEL.REACTIVE = False # debug option to turn off RNN. Assumes include_proprio.
@@ -54,6 +55,7 @@ _C.MODEL.OBJECTIVES = ['predictive']
 # predictive_patch: predict next view prior to seeing it (on RNN)
 # random: predict random views (Not implemented) - probably should support warmup period to see image.
 # autoencode: predict current state well (on RNN)
+# adversarial_patch: real-fake at patch level
 # contrast: minibatch contrast, same image = positives. to improve image reprs.
 # * the problem is that we can't remember.
 _C.MODEL.NOISED_SIGNAL = True # Whether to use noised patches for supervision. True is self-supervised.

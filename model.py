@@ -2,20 +2,61 @@
 from typing import List, Tuple, Optional
 from yacs.config import CfgNode as CN
 
+import numpy as np
 import torch
 from torch import nn, optim
 import torch.nn.functional as F
 import pytorch_lightning as pl
 
-PROPRIOCEPTION_SIZE = 2
+class GaussianFourierFeatureTransform(nn.Module):
+    """
+    An implementation of Gaussian Fourier feature mapping.
+
+    "Fourier Features Let Networks Learn High Frequency Functions in Low Dimensional Domains":
+       https://arxiv.org/abs/2006.10739
+       https://people.eecs.berkeley.edu/~bmild/fourfeat/index.html
+
+    Given an input of size [batches, num_input_channels, width, height],
+     returns a tensor of size [batches, mapping_size*2, width, height].
+
+    * Tune scale higher to repr higher frequency features
+    """
+
+    def __init__(self, num_input_channels=2, mapping_size=64, scale=1):
+        super().__init__()
+
+        self._num_input_channels = num_input_channels
+        self._mapping_size = mapping_size
+        self.register_buffer("_B", torch.randn((num_input_channels, mapping_size)) * scale)
+
+    def forward(self, x):
+        assert x.dim() == 4, 'Expected 4D input (got {}D input)'.format(x.dim())
+
+        batches, channels, width, height = x.shape
+
+        assert channels == self._num_input_channels,\
+            "Expected input to have {} channels (got {} channels)".format(self._num_input_channels, channels)
+
+        # Make shape compatible for matmul with _B.
+        # From [B, C, W, H] to [(B*W*H), C].
+        x = x.permute(0, 2, 3, 1).reshape(batches * width * height, channels)
+
+        x = x @ self._B.to(x.device)
+
+        # From [(B*W*H), C] to [B, W, H, C]
+        x = x.view(batches, width, height, self._mapping_size)
+        # From [B, W, H, C] to [B, C, W, H]
+        x = x.permute(0, 3, 1, 2)
+
+        x = 2 * np.pi * x
+        return torch.cat([torch.sin(x), torch.cos(x)], dim=1)
+
 class SaccadingRNN(pl.LightningModule):
     # We'll train this network with images. We can saccade for e.g. 100 timesteps per image and learn through self-supervision.
     # This model is driven by a saccading policy (here it is hardcoded to pick a random sequence of locations)
     # The model is trained to predict the next visual input.
     # 3 loss schemes
     # 1. E2E, deconv RNN state to predict pixels
-    # TODO Joel Local Predictive Coding: RNN predicts CNN output, CNN predicts pixels (i.e. through autoencoding)
-    # TODO 3. Supervised: Like E2E, but with random locations as input.
 
     def __init__(
         self,
@@ -45,8 +86,14 @@ class SaccadingRNN(pl.LightningModule):
         )
         flat_cnn_out = conv_dim * self.conv_outh * self.conv_outw
 
+        self.proprio_size = 2
+        if self.cfg.FOURIER_PROPRIO:
+            self.proprio_size = 32
+            self.fft_transform = GaussianFourierFeatureTransform(mapping_size=self.proprio_size // 2)
+            self.proprio_grid = None
+
         if self.cfg.INCLUDE_PROPRIO:
-            memory_input_size = self.cfg.SENSORY_SIZE - PROPRIOCEPTION_SIZE
+            memory_input_size = self.cfg.SENSORY_SIZE - self.proprio_size
         else:
             memory_input_size = self.cfg.SENSORY_SIZE
         if self.cfg.TRANSITION_MLP:
@@ -59,7 +106,7 @@ class SaccadingRNN(pl.LightningModule):
             self.sensory_to_memory = nn.Linear(flat_cnn_out, memory_input_size)
 
         if self.cfg.INCLUDE_PROPRIO:
-            sensory_prediction_size = self.cfg.HIDDEN_SIZE + PROPRIOCEPTION_SIZE
+            sensory_prediction_size = self.cfg.HIDDEN_SIZE + self.proprio_size
         else:
             sensory_prediction_size = self.cfg.HIDDEN_SIZE
 
@@ -105,9 +152,26 @@ class SaccadingRNN(pl.LightningModule):
                 nn.Linear(16, 1)
             )
 
+        if 'adversarial_patch' in self.cfg.OBJECTIVES:
+            self.patch_contrast = nn.Sequential(
+                nn.Linear(flat_cnn_out, 1)
+            )
+
         self.weight_decay = config.TRAIN.WEIGHT_DECAY
         self.saccade_training_mode = self.cfg.SACCADE
         self.view_mask = self._generate_falloff_mask()
+
+    def _gen_fft_proprio(self, target):
+        coords = np.linspace(0, 1, target.shape[2], endpoint=False)
+        xy_grid = np.stack(np.meshgrid(coords, coords), -1)
+        proprio_grid = torch.tensor(xy_grid).unsqueeze(0).permute(0, 3, 1, 2).float().contiguous().to(self.device)
+        self.proprio_grid = self.fft_transform(proprio_grid).squeeze(0) # C H W
+
+    def _transform_proprio(self, proprio):
+        # b x 2 -> b x h
+        if not self.cfg.FOURIER_PROPRIO:
+            return proprio
+        return self.proprio_grid[:, proprio[:, 0], proprio[:, 1]].permute(1, 0)
 
     def _evaluate_image_pred(self, gt, pred):
         # Note: the actual quantization scheme was proposed in a more sophisticated way (ref: https://github.com/richzhang/colorization/tree/caffe)
@@ -167,7 +231,11 @@ class SaccadingRNN(pl.LightningModule):
         elif mode == 'constant':
             coords_ratio = torch.full((length, 2), 0.5, device=self.device)
         coords_ratio = torch.clamp(coords_ratio, 0, 1)
-        image_scale = torch.tensor([H, W], device=self.device).float()
+        if self.cfg.FOURIER_PROPRIO:
+            # fix off by one error that only raises in this case
+            image_scale = torch.tensor([H - 1, W - 1], device=self.device).float()
+        else:
+            image_scale = torch.tensor([H, W], device=self.device).float()
         return (coords_ratio * image_scale).long()
 
     def _generate_falloff_mask(self):
@@ -189,16 +257,17 @@ class SaccadingRNN(pl.LightningModule):
         Memory conditioned predictions
         Args:
             state: [T x B x H] state to make prediction with (either CNN output in predictive coding, or memory)
-            focus: [T x 2] location to predict at (given as absolute ratio)
+            focus: [T x 2] location to predict at (given as pixel locs (long))
             mode: 'patch' for pixel reconstruction or 'percept' for CNN reconstruction
         Returns:
             patches: [B x C x H x W] predicted patches at given locations
         """
         if self.cfg.INCLUDE_PROPRIO:
+            focus = self._transform_proprio(focus) # T x 2 -> T x H
             state = torch.cat([
-                state, focus.unsqueeze(1).expand(-1, state.size(1), 2)
+                state,
+                focus.unsqueeze(1).expand(-1, state.size(1), -1)
             ], dim=-1)
-
         prediction_cue = self.predict_sensory(state) # extract cnn prediction
         if mode == 'patch': # Make a prediction about image patch from memory
             # T x B x Hidden -> T x B x C x H x W
@@ -231,6 +300,7 @@ class SaccadingRNN(pl.LightningModule):
         flat_cnn_view = cnn_view.flatten(2, -1) # T x B x H
         memory_input = self.sensory_to_memory(flat_cnn_view) # T x B x Hidden
         if self.cfg.INCLUDE_PROPRIO:
+            saccade_focus = self._transform_proprio(saccade_focus)
             saccade_sense = saccade_focus.unsqueeze(1).expand(
                 -1, view.size(1), -1
             ) # T x B x 2
@@ -270,7 +340,10 @@ class SaccadingRNN(pl.LightningModule):
                 torch.zeros((1,2), dtype=torch.float, device=self.device), proprioception
             ], dim=0)
         else:
-            return saccades.float() / torch.tensor(image.size()[-2:], device=self.device).float() - 0.5 # 0 center
+            if self.cfg.FOURIER_PROPRIO:
+                return saccades
+            else:
+                return saccades.float() / torch.tensor(image.size()[-2:], device=self.device).float() - 0.5 # 0 center
 
     def saccade_image(
         self,
@@ -295,7 +368,8 @@ class SaccadingRNN(pl.LightningModule):
                 hidden_state: [B x H] (model memory at conclusion)
         """
         self.view_mask = self.view_mask.to(self.device) # ! weird, we can't set it in __init__()
-
+        if self.cfg.FOURIER_PROPRIO and self.proprio_grid is None:
+            self._gen_fft_proprio(image)
         if initial_state is None:
             hidden_state = torch.zeros((1, image.size(0), self.cfg.HIDDEN_SIZE), device=self.device)
         else:
@@ -315,6 +389,17 @@ class SaccadingRNN(pl.LightningModule):
             if objective == 'predictive_patch':
                 all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='patch')
                 loss = self._evaluate_image_pred(supervisory_view[1:], all_patches)
+            elif objective == 'adversarial_patch':
+                # Assumes all patches is already defined
+                fake_patches = all_patches # T B C H W
+                real_disc = self.patch_contrast(cnn_view.flatten(2, -1)) # unnoised # Note the CNN must process unnoised and noised inputs, somehow
+                fake_cnn_view = self.cnn_sensory(all_patches.flatten(0, 1)).unflatten(
+                    0, (all_patches.size(0), all_patches.size(1)) # T x B x C x H x W
+                )
+                fake_disc = self.patch_contrast(fake_cnn_view.flatten(2, -1)) # T x B x H
+                loss = F.binary_cross_entropy_with_logits(real_disc, torch.ones_like(real_disc)) + \
+                    F.binary_cross_entropy_with_logits(fake_disc, torch.zeros_like(fake_disc))
+                # TODO maybe need to subsample or make this less aggressive or whatever
             elif objective == 'autoencode': # Legacy, debug objective
                 if self.cfg.REACTIVE:
                     all_patches = self.cnn_predictive(cnn_view.flatten(0, 1)).unflatten(0, (cnn_view.size(0), cnn_view.size(1)))
@@ -400,6 +485,8 @@ class SaccadingRNN(pl.LightningModule):
             Finer control
         """
         image = image.unsqueeze(0)
+        if self.cfg.FOURIER_PROPRIO and self.proprio_grid is None:
+            self._gen_fft_proprio(image)
         all_patches = []
 
         if initial_state is None:

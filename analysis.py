@@ -10,40 +10,23 @@ import torch.nn.functional as F
 from config.default import get_config
 from model import SaccadingRNN
 from dataset import UniformityDataset
-# We need to grab the checkpoint, and its corresponding config.
-# TODO figure out how to store the config in checkpoint and just load checkpoints
+
+seed = 0
+
 config = './config/base.yaml'
 config = './config/debug.yaml'
 # config = './config/debug2.yaml'
 # config = './config/base.yaml'
 # config = './config/base_e2e.yaml'
 config = './config/large.yaml'
-seed = 0
-version = 10
-version = 12
-version = 14
-version = 16
-version = 18
-version = 21
-version = 40
-version = 42
-version = 43
-version = 48
-version = 49
-version = 50
-version = 57
-version = 0
-version = 58
-version = 59
-version = 63
-version = 70
-version = 72
-version = 73
-version = 84
-version = 85
-version = 1
+config = './config/large_adv.yaml'
 version = 5
 version = 0
+version = 2
+
+# config = './config/large_sin.yaml'
+# version = 15
+
 
 variant = osp.split(config)[1].split('.')[0]
 config = get_config(config)
@@ -57,6 +40,7 @@ model = SaccadingRNN(config)
 model.load_state_dict(weights['state_dict'])
 model.eval()
 dataset = UniformityDataset(config, split="train")
+
 
 #%%
 index = 0
