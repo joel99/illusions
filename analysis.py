@@ -24,8 +24,8 @@ version = 5
 version = 0
 version = 2
 
-# config = './config/large_sin.yaml'
-# version = 15
+config = './config/large_sin.yaml'
+version = 15
 
 
 variant = osp.split(config)[1].split('.')[0]
@@ -45,10 +45,10 @@ dataset = UniformityDataset(config, split="train")
 #%%
 index = 0
 # index = 2
-# index = 9
-index = 25000
+index = 9
+# index = 25000
 
-# index = 700
+index = 700
 # index = 750
 # index = 800
 image = dataset[index]
@@ -94,8 +94,8 @@ plt.savefig('test.png')
 #%%
 import numpy as np
 step = 3
-grid_h = np.linspace(0, image.size(-2), step)
-grid_w = np.linspace(0, image.size(-1), step)
+grid_h = np.linspace(0, image.size(-2)-1, step)
+grid_w = np.linspace(0, image.size(-1)-1, step)
 grid_x, grid_y = np.meshgrid(grid_h, grid_w)
 grid = torch.stack([torch.tensor(grid_x), torch.tensor(grid_y)], dim=-1).long()
 

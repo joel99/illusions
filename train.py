@@ -88,10 +88,11 @@ def run_exp(
         overfit_batches=10 if OVERFIT else 0
     )
 
+    num_workers = 32
     trainer.fit(
         model,
-        DataLoader(train, batch_size=config.TRAIN.BATCH_SIZE, num_workers=4, pin_memory=True),
-        DataLoader(val, batch_size=config.TRAIN.BATCH_SIZE, num_workers=4, pin_memory=True)
+        DataLoader(train, batch_size=config.TRAIN.BATCH_SIZE, num_workers=num_workers),
+        DataLoader(val, batch_size=config.TRAIN.BATCH_SIZE, num_workers=num_workers)
     )
 
     print()
@@ -106,7 +107,7 @@ def run_exp(
     print()
     print("Test results")
     trainer.test(
-        model, DataLoader(test_dataset, batch_size=64, pin_memory=True)
+        model, DataLoader(test_dataset, batch_size=64)
     )
 
 
