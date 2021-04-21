@@ -1,6 +1,7 @@
 import pathlib
 import os
 import os.path as osp
+from os.path import isfile
 from PIL import Image
 
 from yacs.config import CfgNode as CN
@@ -18,7 +19,9 @@ class UniformityDataset(Dataset):
         super().__init__()
         dataset_root = osp.join(dataset_root, split)
         self.all_paths = list(map(lambda x: osp.join(dataset_root, x), os.listdir(dataset_root)))
+        self.all_paths = [f for f in self.all_paths if isfile(f)]
         self.grayscale = config.TASK.CHANNELS == 1
+        self.cache = {}
 
     def preprocess(self, img):
         img = F.resize(img, (64, 64))
@@ -37,5 +40,10 @@ class UniformityDataset(Dataset):
         return len(self.all_paths)
 
     def __getitem__(self, index):
+        if len(self) < 10 and index in self.cache:
+            return self.cache[index]
         img = Image.open(self.all_paths[index])
-        return self.preprocess(img)
+        item = self.preprocess(img)
+        if len(self) < 10:
+            self.cache[index] = item
+        return item

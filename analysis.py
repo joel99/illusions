@@ -23,10 +23,17 @@ config = './config/large_adv.yaml'
 version = 5
 version = 0
 version = 2
+config = './config/large_adv_sin.yaml'
+version = 4
 
-config = './config/large_sin.yaml'
-version = 15
-
+# config = './config/large_sin.yaml'
+# version = 18
+config = './config/snakes_slow.yaml'
+version = 0
+version = 2
+version = 3
+# config = './config/snakes.yaml'
+# version = 9
 
 variant = osp.split(config)[1].split('.')[0]
 config = get_config(config)
@@ -39,16 +46,19 @@ weights = torch.load(model_ckpt, map_location='cpu')
 model = SaccadingRNN(config)
 model.load_state_dict(weights['state_dict'])
 model.eval()
-dataset = UniformityDataset(config, split="train")
 
+if config.TASK.NAME == 'UNIFORMITY':
+    dataset = UniformityDataset(config, split="train")
+else:
+    dataset = UniformityDataset(config, split="train", dataset_root='./data/snakes')
 
 #%%
 index = 0
 # index = 2
-index = 9
+# index = 9
 # index = 25000
 
-index = 700
+# index = 700
 # index = 750
 # index = 800
 image = dataset[index]
@@ -124,6 +134,8 @@ axes[1].imshow(belief)
 axes[1].set_title('Perceived')
 axes[1].axis('off')
 plt.savefig('test.png', dpi=300)
+
+# %%
 
 #%%
 plt.imshow(image.squeeze(0))

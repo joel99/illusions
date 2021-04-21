@@ -1,0 +1,12 @@
+TASK:
+    NAME: 'snakes'
+    CHANNELS: 1
+MODEL:
+    SACCADE: 'walk'
+    OBJECTIVES: ['predictive_patch']
+    NOISED_SIGNAL: True
+    FOURIER_PROPRIO: True
+    HIDDEN_SIZE: 512
+    WALK_PACE: 0.0
+TRAIN:
+    EPOCHS: 12

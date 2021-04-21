@@ -156,6 +156,7 @@ class SaccadingRNN(pl.LightningModule):
             self.patch_contrast = nn.Sequential(
                 nn.Linear(flat_cnn_out, 1)
             )
+            self.automatic_optimization = False
 
         self.weight_decay = config.TRAIN.WEIGHT_DECAY
         self.saccade_training_mode = self.cfg.SACCADE
@@ -215,7 +216,7 @@ class SaccadingRNN(pl.LightningModule):
             # TODO Make walking more realistic -- humans don't random walk off the image.
             # A better heuristic is to weigh directional probability by location
             #   but that might be too slow.
-            WALK_PACE = 0.1
+            WALK_PACE = self.cfg.WALK_PACE
             start_ratio = torch.tensor([0.5, 0.5], device=self.device).unsqueeze(0).float() # 1 x 2
             deltas_ratio = torch.randn((length - 1, 2), device=self.device) * WALK_PACE
             coords_ratio = torch.cat([start_ratio, deltas_ratio], dim=0)
@@ -391,6 +392,8 @@ class SaccadingRNN(pl.LightningModule):
                 loss = self._evaluate_image_pred(supervisory_view[1:], all_patches)
             elif objective == 'adversarial_patch':
                 # Assumes all patches is already defined
+                if len(all_patches) == 0:
+                    all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='patch')
                 fake_patches = all_patches # T B C H W
                 real_disc = self.patch_contrast(cnn_view.flatten(2, -1)) # unnoised # Note the CNN must process unnoised and noised inputs, somehow
                 fake_cnn_view = self.cnn_sensory(all_patches.flatten(0, 1)).unflatten(
@@ -400,6 +403,8 @@ class SaccadingRNN(pl.LightningModule):
                 loss = F.binary_cross_entropy_with_logits(real_disc, torch.ones_like(real_disc)) + \
                     F.binary_cross_entropy_with_logits(fake_disc, torch.zeros_like(fake_disc))
                 # TODO maybe need to subsample or make this less aggressive or whatever
+                # whoa whoa whoa this is all wrong.
+                # we need to make this **adversarial** dude. you're making it **cooperative**.
             elif objective == 'autoencode': # Legacy, debug objective
                 if self.cfg.REACTIVE:
                     all_patches = self.cnn_predictive(cnn_view.flatten(0, 1)).unflatten(0, (cnn_view.size(0), cnn_view.size(1)))
@@ -556,11 +561,13 @@ class SaccadingRNN(pl.LightningModule):
     def configure_optimizers(self):
         # Reduce LR on plateau as a reasonable default
         optimizer = optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.weight_decay)
-        return {
+        # optimizer_generator = optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.weight_decay)
+        # optimizer_discriminator = optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.weight_decay)
+        return [{
             'optimizer': optimizer,
             'lr_scheduler': optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=50),
             'monitor': 'val_loss'
-        }
+        }]
 
 def upsample_conv(c_in, c_out, scale_factor, k_size=3, stride=1, pad=1, bn=True):
     return nn.Sequential(

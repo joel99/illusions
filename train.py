@@ -59,6 +59,9 @@ def run_exp(
 
     if config.TASK.NAME == 'UNIFORMITY':
         dataset = UniformityDataset(config, split="train")
+    elif config.TASK.NAME == 'snakes':
+        dataset = UniformityDataset(config, split="train", dataset_root='./data/snakes')
+        OVERFIT = True
     # elif config.TASK.NAME == 'CIFAR':
     #     dataset = torchvision.datasets.CIFAR10(
     #         root='./data',
@@ -67,11 +70,15 @@ def run_exp(
     else:
         raise NotImplementedError
     length = len(dataset)
-    train, val = random_split(
-        dataset,
-        [int(length * 0.8), length - int(length * 0.8)],
-        generator=torch.Generator().manual_seed(42)
-    )
+    if OVERFIT:
+        train = dataset
+        val = dataset
+    else:
+        train, val = random_split(
+            dataset,
+            [int(length * 0.8), length - int(length * 0.8)],
+            generator=torch.Generator().manual_seed(42)
+        )
     print("Training on ", len(train), " examples")
 
     lr_logger = LearningRateMonitor(logging_interval='step')
@@ -83,9 +90,10 @@ def run_exp(
         max_epochs=epochs,
         gpus=1,
         val_check_interval=1.0,
+        # check_val_every_n_epoch=10 if OVERFIT else 1,
         callbacks=[lr_logger],
         default_root_dir=f"./runs/{config.VARIANT}-{config.SEED}",
-        overfit_batches=10 if OVERFIT else 0
+        overfit_batches=1 if OVERFIT else 0
     )
 
     num_workers = 32
@@ -101,6 +109,8 @@ def run_exp(
 
     if config.TASK.NAME == 'UNIFORMITY':
         test_dataset = UniformityDataset(config, split="test")
+    elif config.TASK.NAME == 'snakes':
+        test_dataset = UniformityDataset(config, split="test", dataset_root='./data/snakes')
     else:
         raise NotImplementedError
 
