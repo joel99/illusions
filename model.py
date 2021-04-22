@@ -156,11 +156,12 @@ class SaccadingRNN(pl.LightningModule):
             self.patch_contrast = nn.Sequential(
                 nn.Linear(flat_cnn_out, 1)
             )
-            self.automatic_optimization = False
+        self.adversarial = 'adversarial_patch' in self.cfg.OBJECTIVES
 
         self.weight_decay = config.TRAIN.WEIGHT_DECAY
         self.saccade_training_mode = self.cfg.SACCADE
         self.view_mask = self._generate_falloff_mask()
+        # self.automatic_optimization = False # ok, what if we don't set this
 
     def _gen_fft_proprio(self, target):
         coords = np.linspace(0, 1, target.shape[2], endpoint=False)
@@ -346,6 +347,23 @@ class SaccadingRNN(pl.LightningModule):
             else:
                 return saccades.float() / torch.tensor(image.size()[-2:], device=self.device).float() - 0.5 # 0 center
 
+    def _prepare_inputs(
+        self, image, length=50, mode=None, initial_state: Optional[torch.tensor]=None,
+    ):
+        self.view_mask = self.view_mask.to(self.device) # ! weird, we can't set it in __init__()
+        if self.cfg.FOURIER_PROPRIO and self.proprio_grid is None:
+            self._gen_fft_proprio(image)
+        if initial_state is None:
+            hidden_state = torch.zeros((1, image.size(0), self.cfg.HIDDEN_SIZE), device=self.device)
+        else:
+            hidden_state = initial_state
+
+        # Generate observations
+        saccades = self._generate_saccades(image, length=length, mode=mode)
+        all_views, noised_views = self.get_views(image, saccades)
+        proprioception = self.get_proprioception(image, saccades)
+        return saccades, all_views, noised_views, proprioception, hidden_state
+
     def saccade_image(
         self,
         image,
@@ -368,18 +386,9 @@ class SaccadingRNN(pl.LightningModule):
                 patches: [T x B x C x H x W] (model percepts).
                 hidden_state: [B x H] (model memory at conclusion)
         """
-        self.view_mask = self.view_mask.to(self.device) # ! weird, we can't set it in __init__()
-        if self.cfg.FOURIER_PROPRIO and self.proprio_grid is None:
-            self._gen_fft_proprio(image)
-        if initial_state is None:
-            hidden_state = torch.zeros((1, image.size(0), self.cfg.HIDDEN_SIZE), device=self.device)
-        else:
-            hidden_state = initial_state
-
-        # Generate observations
-        saccades = self._generate_saccades(image, length=length, mode=mode)
-        all_views, noised_views = self.get_views(image, saccades)
-        proprioception = self.get_proprioception(image, saccades)
+        saccades, all_views, noised_views, proprioception, hidden_state = self._prepare_inputs(
+            image, length=length, mode=mode, initial_state=initial_state
+        )
 
         # Forward and calculate loss
         cnn_view, memory_input, rnn_view, hidden_state = self(noised_views, proprioception, hidden_state)
@@ -420,27 +429,6 @@ class SaccadingRNN(pl.LightningModule):
                 cnn_predictions = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='percept')
                 loss_rnn = self.mse(cnn_view[1:], cnn_predictions)
                 loss = loss_cnn + loss_rnn
-            elif objective == 'contrast':
-                raise NotImplementedError
-                # minibatch contrast of memory input T B H
-                # NUM_PAIRS = 8
-                # # TODO index random batches...
-                # time_pairs = torch.randint(0, memory_input.size(0), (NUM_PAIRS * 2)) #
-                # batch_negatives = torch.randint(0, memory_input.size(1), (NUM_PAIRS, 2))
-                # batch_positives = torch.randint(0, memory_input.size(1), (NUM_PAIRS, 1)).expand(NUM_PAIRS, 2)
-                # positives = torch.gather(
-                #     memory_input.flatten(0, 1),
-                #     dim=0,
-                #     index=time_pairs.expand_as(memory_input.size())
-                # ).reshape(NUM_PAIRS, 2 * memory_input.size(0), memory_input.size(1), memory_input.size(2)) # P x 2T x H
-                # #
-                # negatives = torch.gather(
-                #     positives.view(t * n, -1),
-                #     dim=0,
-                #     index=negative_inds.view(t * n, 1).expand(-1, positives.size(-1)),
-                # ).view(t, n, -1)
-            elif objective == 'random':
-                raise NotImplementedError # TODO Joel
             else:
                 raise Exception
             losses.append(loss)
@@ -449,11 +437,6 @@ class SaccadingRNN(pl.LightningModule):
         # TODO how do we decide what patches to return?
         # Currently it'll return the last objective's patches
         return loss, all_views, noised_views, all_patches, hidden_state
-
-    # Pytorch lightning API below
-    # TODO systematic prediction to get a "full image" percept.
-    # Problem is that we don't train in any systematic matter
-    # So grid-based reconstruction is probably not exactly accurate.
 
     @torch.no_grad()
     def predict(
@@ -540,12 +523,70 @@ class SaccadingRNN(pl.LightningModule):
         all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='patch')
         return all_views, noised_views, all_patches, hidden_state
 
+    def _manual_adversarial(
+        self, optimizer_idx, # grossly inefficient, but pytorch-lightning only gives us these options
+        image, length=50, mode=None, initial_state: Optional[torch.tensor]=None,
 
-    def training_step(self, batch, batch_idx):
+    ):
+        saccades, all_views, noised_views, proprioception, hidden_state = self._prepare_inputs(
+            image, length=length, mode=mode, initial_state=initial_state
+        )
+        # Forward and calculate loss
+        cnn_view, memory_input, rnn_view, hidden_state = self(noised_views, proprioception, hidden_state)
+
+        g_opt, d_opt = self.optimizers()
+
+        losses = []
+        all_patches = []
+        supervisory_view = noised_views if self.cfg.NOISED_SIGNAL else all_views
+        for objective in self.cfg.OBJECTIVES:
+            if objective == 'predictive_patch': # ! Not supported
+                continue
+                all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='patch')
+                loss = self._evaluate_image_pred(supervisory_view[1:], all_patches)
+            elif objective == 'adversarial_patch':
+                # Assumes all patches is already defined
+                if len(all_patches) == 0:
+                    all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='patch')
+                # Discriminator
+                if optimizer_idx == 0:
+                    real_disc = self.patch_contrast(cnn_view.flatten(2, -1)) # unnoised # Note the CNN must process unnoised and noised inputs, somehow
+                    fake_patches = all_patches.detach() # ! T B C H W
+                    fake_cnn_view = self.cnn_sensory(fake_patches.flatten(0, 1)).unflatten(
+                        0, (all_patches.size(0), all_patches.size(1)) # T x B x C x H x W
+                    )
+                    fake_disc = self.patch_contrast(fake_cnn_view.flatten(2, -1)) # T x B x H
+                    loss_disc = F.binary_cross_entropy_with_logits(real_disc, torch.ones_like(real_disc)) + \
+                        F.binary_cross_entropy_with_logits(fake_disc, torch.zeros_like(fake_disc))
+                    return loss_disc
+                    # d_opt.zero_grad()
+                    # self.manual_backward(loss_disc)
+                    # d_opt.step()
+
+                # Generator
+                if optimizer_idx == 1:
+                    fake_patches = all_patches
+                    fake_cnn_view = self.cnn_sensory(fake_patches.flatten(0, 1)).unflatten(
+                        0, (all_patches.size(0), all_patches.size(1)) # T x B x C x H x W
+                    )
+                    fake_disc = self.patch_contrast(fake_cnn_view.flatten(2, -1)) # T x B x H
+                    loss_gen = F.binary_cross_entropy_with_logits(fake_disc, torch.ones_like(fake_disc))
+                    return loss_gen
+                    # g_opt.zero_grad()
+                    # self.manual_backward(loss_gen)
+                    # g_opt.step()
+                # self.log_dict({'g_loss': loss_gen, 'd_loss': loss_disc}, prog_bar=True)
+            else:
+                continue
+
+    def training_step(self, batch, batch_idx, optimizer_idx):
         # batch - B x H x W
-        loss, *_ = self.saccade_image(batch)
-        self.log('train_loss', loss, prog_bar=True)
-        return loss
+        if self.adversarial:
+            loss, *_ = self.saccade_image(batch)
+            self.log('train_loss', loss, prog_bar=True)
+            return loss
+        else:
+            self._manual_adversarial(batch, optimizer_idx)
 
     def validation_step(self, batch, batch_idx):
         loss, *_ = self.saccade_image(batch)
@@ -561,13 +602,22 @@ class SaccadingRNN(pl.LightningModule):
     def configure_optimizers(self):
         # Reduce LR on plateau as a reasonable default
         optimizer = optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.weight_decay)
-        # optimizer_generator = optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.weight_decay)
-        # optimizer_discriminator = optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.weight_decay)
-        return [{
-            'optimizer': optimizer,
-            'lr_scheduler': optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=50),
-            'monitor': 'val_loss'
-        }]
+
+        if not self.adversarial:
+            return {
+                'optimizer': optimizer,
+                'lr_scheduler': optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=50),
+                'monitor': 'val_loss'
+            }
+
+        # TODO update these guys' parameters
+        opt_d = optim.Adam([
+            self.parameters()
+        ], lr=1e-3, weight_decay=self.weight_decay)
+        opt_g = optim.Adam([
+            self.parameters()
+        ], lr=1e-3, weight_decay=self.weight_decay)
+        return [opt_d, opt_g],  []
 
 def upsample_conv(c_in, c_out, scale_factor, k_size=3, stride=1, pad=1, bn=True):
     return nn.Sequential(

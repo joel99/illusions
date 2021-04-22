@@ -26,14 +26,17 @@ version = 2
 config = './config/large_adv_sin.yaml'
 version = 4
 
-# config = './config/large_sin.yaml'
-# version = 18
-config = './config/snakes_slow.yaml'
-version = 0
-version = 2
-version = 3
+config = './config/large_sin.yaml'
+version = 18
+# config = './config/snakes_slow.yaml'
+# version = 0
+# version = 2
+# version = 3
 # config = './config/snakes.yaml'
 # version = 9
+
+# config = './config/snakes_adv.yaml'
+# version = 4
 
 variant = osp.split(config)[1].split('.')[0]
 config = get_config(config)
@@ -57,6 +60,11 @@ index = 0
 # index = 2
 # index = 9
 # index = 25000
+index = 100
+index = 20000
+index = 11000
+index = 11011
+# index = 11000
 
 # index = 700
 # index = 750
