@@ -61,7 +61,8 @@ _C.MODEL.OBJECTIVES = ['predictive']
 # contrast: minibatch contrast, same image = positives. to improve image reprs.
 # * the problem is that we can't remember.
 _C.MODEL.NOISED_SIGNAL = True # Whether to use noised patches for supervision. True is self-supervised.
-
+_C.MODEL.ADV_CONF = 0.0
+_C.MODEL.DISTINCT_DISCRIMINATOR = True # separate CNN for discriminator (than encoder)
 # -----------------------------------------------------------------------------
 # Train Config
 # -----------------------------------------------------------------------------

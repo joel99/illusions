@@ -3,7 +3,7 @@ TASK:
     CHANNELS: 1
 MODEL:
     SACCADE: 'walk'
-    OBJECTIVES: ['predictive_patch', 'adversarial_patch']
+    OBJECTIVES: ['adversarial_patch']
     NOISED_SIGNAL: True
     FOURIER_PROPRIO: True
     HIDDEN_SIZE: 512

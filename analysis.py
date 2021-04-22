@@ -35,8 +35,10 @@ version = 18
 # config = './config/snakes.yaml'
 # version = 9
 
-# config = './config/snakes_adv.yaml'
-# version = 4
+config = './config/snakes_adv.yaml'
+version = 19
+config = './config/snakes_adv_only.yaml'
+version = 13
 
 variant = osp.split(config)[1].split('.')[0]
 config = get_config(config)
@@ -60,11 +62,10 @@ index = 0
 # index = 2
 # index = 9
 # index = 25000
-index = 100
-index = 20000
-index = 11000
-index = 11011
+# index = 100
+# index = 20000
 # index = 11000
+# index = 11011
 
 # index = 700
 # index = 750
@@ -89,7 +90,6 @@ print(loss1)
 plt.imshow(image.squeeze(0))
 
 #%%
-# It don't even look like the right image.
 times = [0, 10, 20, 30]
 f, axes = plt.subplots(len(times), 2, sharex=True, sharey=True)
 for i, t in enumerate(times):

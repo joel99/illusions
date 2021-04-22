@@ -1,12 +1,13 @@
 # Model definition
 from typing import List, Tuple, Optional
+from collections import OrderedDict
 from yacs.config import CfgNode as CN
-
 import numpy as np
 import torch
 from torch import nn, optim
 import torch.nn.functional as F
 import pytorch_lightning as pl
+from copy import deepcopy
 
 class GaussianFourierFeatureTransform(nn.Module):
     """
@@ -156,6 +157,10 @@ class SaccadingRNN(pl.LightningModule):
             self.patch_contrast = nn.Sequential(
                 nn.Linear(flat_cnn_out, 1)
             )
+            if self.cfg.DISTINCT_DISCRIMINATOR:
+                self.discriminator = deepcopy(self.cnn_sensory)
+            else:
+                self.discriminator = self.cnn_sensory
         self.adversarial = 'adversarial_patch' in self.cfg.OBJECTIVES
 
         self.weight_decay = config.TRAIN.WEIGHT_DECAY
@@ -401,17 +406,19 @@ class SaccadingRNN(pl.LightningModule):
                 loss = self._evaluate_image_pred(supervisory_view[1:], all_patches)
             elif objective == 'adversarial_patch':
                 # Assumes all patches is already defined
-                if len(all_patches) == 0:
-                    all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='patch')
-                fake_patches = all_patches # T B C H W
-                real_disc = self.patch_contrast(cnn_view.flatten(2, -1)) # unnoised # Note the CNN must process unnoised and noised inputs, somehow
-                fake_cnn_view = self.cnn_sensory(all_patches.flatten(0, 1)).unflatten(
-                    0, (all_patches.size(0), all_patches.size(1)) # T x B x C x H x W
-                )
-                fake_disc = self.patch_contrast(fake_cnn_view.flatten(2, -1)) # T x B x H
-                loss = F.binary_cross_entropy_with_logits(real_disc, torch.ones_like(real_disc)) + \
-                    F.binary_cross_entropy_with_logits(fake_disc, torch.zeros_like(fake_disc))
-                # TODO maybe need to subsample or make this less aggressive or whatever
+                loss = torch.tensor(0, device=self.device, dtype=torch.float)
+                # assert False
+                # if len(all_patches) == 0:
+                #     all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='patch')
+                # fake_patches = all_patches # T B C H W
+                # real_disc = self.patch_contrast(cnn_view.flatten(2, -1)) # unnoised # Note the CNN must process unnoised and noised inputs, somehow
+                # fake_cnn_view = self.cnn_sensory(fake_patches.flatten(0, 1)).unflatten(
+                #     0, (all_patches.size(0), all_patches.size(1)) # T x B x C x H x W
+                # )
+                # fake_disc = self.patch_contrast(fake_cnn_view.flatten(2, -1)) # T x B x H
+                # loss = F.binary_cross_entropy_with_logits(real_disc, torch.ones_like(real_disc)) + \
+                #     F.binary_cross_entropy_with_logits(fake_disc, torch.zeros_like(fake_disc))
+                # # TODO maybe need to subsample or make this less aggressive or whatever
                 # whoa whoa whoa this is all wrong.
                 # we need to make this **adversarial** dude. you're making it **cooperative**.
             elif objective == 'autoencode': # Legacy, debug objective
@@ -524,8 +531,8 @@ class SaccadingRNN(pl.LightningModule):
         return all_views, noised_views, all_patches, hidden_state
 
     def _manual_adversarial(
-        self, optimizer_idx, # grossly inefficient, but pytorch-lightning only gives us these options
-        image, length=50, mode=None, initial_state: Optional[torch.tensor]=None,
+        self, # grossly inefficient, but pytorch-lightning only gives us these options
+        image, optimizer_idx, length=50, mode=None, initial_state: Optional[torch.tensor]=None,
 
     ):
         saccades, all_views, noised_views, proprioception, hidden_state = self._prepare_inputs(
@@ -534,63 +541,64 @@ class SaccadingRNN(pl.LightningModule):
         # Forward and calculate loss
         cnn_view, memory_input, rnn_view, hidden_state = self(noised_views, proprioception, hidden_state)
 
-        g_opt, d_opt = self.optimizers()
+        # mse_opt, g_opt, d_opt = self.optimizers()
 
         losses = []
         all_patches = []
         supervisory_view = noised_views if self.cfg.NOISED_SIGNAL else all_views
         for objective in self.cfg.OBJECTIVES:
-            if objective == 'predictive_patch': # ! Not supported
-                continue
-                all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='patch')
-                loss = self._evaluate_image_pred(supervisory_view[1:], all_patches)
-            elif objective == 'adversarial_patch':
-                # Assumes all patches is already defined
-                if len(all_patches) == 0:
+            if objective == 'predictive_patch':
+                if optimizer_idx == 2:
                     all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='patch')
+                    mse_loss = self._evaluate_image_pred(supervisory_view[1:], all_patches)
+                    self.log('mse_loss', mse_loss, prog_bar=True)
+                    return mse_loss
+                else:
+                    continue
+            elif objective == 'adversarial_patch':
+                if optimizer_idx > 1:
+                    continue
+                # Assumes all patches is already defined
+                all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='patch')
                 # Discriminator
                 if optimizer_idx == 0:
-                    real_disc = self.patch_contrast(cnn_view.flatten(2, -1)) # unnoised # Note the CNN must process unnoised and noised inputs, somehow
+                    real_cnn_view = self.discriminator(all_views.flatten(0, 1))
+                    real_disc = self.patch_contrast(real_cnn_view.flatten(-3, -1)) # unnoised
                     fake_patches = all_patches.detach() # ! T B C H W
-                    fake_cnn_view = self.cnn_sensory(fake_patches.flatten(0, 1)).unflatten(
-                        0, (all_patches.size(0), all_patches.size(1)) # T x B x C x H x W
-                    )
-                    fake_disc = self.patch_contrast(fake_cnn_view.flatten(2, -1)) # T x B x H
-                    loss_disc = F.binary_cross_entropy_with_logits(real_disc, torch.ones_like(real_disc)) + \
-                        F.binary_cross_entropy_with_logits(fake_disc, torch.zeros_like(fake_disc))
+                    fake_cnn_view = self.discriminator(fake_patches.flatten(0, 1))
+                    fake_disc = self.patch_contrast(fake_cnn_view.flatten(-3, -1)) # T x B x H
+                    CONF_OFFSET = self.cfg.ADV_CONF
+                    loss_disc = F.binary_cross_entropy_with_logits(real_disc, torch.ones_like(real_disc) - CONF_OFFSET) + \
+                        F.binary_cross_entropy_with_logits(fake_disc, torch.zeros_like(fake_disc) + CONF_OFFSET)
+                    self.log('d_loss', loss_disc, prog_bar=True)
                     return loss_disc
-                    # d_opt.zero_grad()
-                    # self.manual_backward(loss_disc)
-                    # d_opt.step()
-
                 # Generator
                 if optimizer_idx == 1:
                     fake_patches = all_patches
-                    fake_cnn_view = self.cnn_sensory(fake_patches.flatten(0, 1)).unflatten(
+                    fake_cnn_view = self.discriminator(fake_patches.flatten(0, 1)).unflatten(
                         0, (all_patches.size(0), all_patches.size(1)) # T x B x C x H x W
                     )
                     fake_disc = self.patch_contrast(fake_cnn_view.flatten(2, -1)) # T x B x H
                     loss_gen = F.binary_cross_entropy_with_logits(fake_disc, torch.ones_like(fake_disc))
+
+                    self.log('g_loss', loss_gen, prog_bar=True)
                     return loss_gen
-                    # g_opt.zero_grad()
-                    # self.manual_backward(loss_gen)
-                    # g_opt.step()
-                # self.log_dict({'g_loss': loss_gen, 'd_loss': loss_disc}, prog_bar=True)
             else:
                 continue
 
     def training_step(self, batch, batch_idx, optimizer_idx):
         # batch - B x H x W
-        if self.adversarial:
+        if not self.adversarial:
             loss, *_ = self.saccade_image(batch)
             self.log('train_loss', loss, prog_bar=True)
             return loss
         else:
-            self._manual_adversarial(batch, optimizer_idx)
+            return self._manual_adversarial(batch, optimizer_idx)
 
     def validation_step(self, batch, batch_idx):
         loss, *_ = self.saccade_image(batch)
-        self.log('val_loss', loss, prog_bar=True)
+        if not self.adversarial:
+            self.log('val_loss', loss, prog_bar=True)
         return loss
 
     def test_step(self, batch, batch_idx):
@@ -609,15 +617,16 @@ class SaccadingRNN(pl.LightningModule):
                 'lr_scheduler': optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=50),
                 'monitor': 'val_loss'
             }
-
-        # TODO update these guys' parameters
-        opt_d = optim.Adam([
+        opt_mse = optim.Adam(
             self.parameters()
-        ], lr=1e-3, weight_decay=self.weight_decay)
-        opt_g = optim.Adam([
+        , lr=1e-3, weight_decay=self.weight_decay)
+        opt_d = optim.Adam(
             self.parameters()
-        ], lr=1e-3, weight_decay=self.weight_decay)
-        return [opt_d, opt_g],  []
+        , lr=1e-3, weight_decay=self.weight_decay)
+        opt_g = optim.Adam(
+            self.parameters()
+        , lr=1e-3, weight_decay=self.weight_decay)
+        return [opt_d, opt_g, opt_mse],  []
 
 def upsample_conv(c_in, c_out, scale_factor, k_size=3, stride=1, pad=1, bn=True):
     return nn.Sequential(
