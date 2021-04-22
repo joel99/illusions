@@ -161,6 +161,7 @@ class SaccadingRNN(pl.LightningModule):
                 self.discriminator = deepcopy(self.cnn_sensory)
             else:
                 self.discriminator = self.cnn_sensory
+            self._automatic_optimization = False # Hack
         self.adversarial = 'adversarial_patch' in self.cfg.OBJECTIVES
 
         self.weight_decay = config.TRAIN.WEIGHT_DECAY
@@ -560,11 +561,14 @@ class SaccadingRNN(pl.LightningModule):
                     continue
                 # Assumes all patches is already defined
                 all_patches = self._predict_at_location(rnn_view[:-1], saccades[1:], mode='patch')
-                # Discriminator
+                # Discriminator - optimizers are properly configured, so we don't technically need to detach
                 if optimizer_idx == 0:
-                    real_cnn_view = self.discriminator(all_views.flatten(0, 1))
+                    # We can't seem to even generator the mean properly. Why?
+                    # Use noise, so it's easier
+                    real_cnn_view = self.discriminator(supervisory_view.flatten(0, 1))
                     real_disc = self.patch_contrast(real_cnn_view.flatten(-3, -1)) # unnoised
-                    fake_patches = all_patches.detach() # ! T B C H W
+                    fake_patches = all_patches.detach()
+
                     fake_cnn_view = self.discriminator(fake_patches.flatten(0, 1))
                     fake_disc = self.patch_contrast(fake_cnn_view.flatten(-3, -1)) # T x B x H
                     CONF_OFFSET = self.cfg.ADV_CONF
@@ -575,10 +579,8 @@ class SaccadingRNN(pl.LightningModule):
                 # Generator
                 if optimizer_idx == 1:
                     fake_patches = all_patches
-                    fake_cnn_view = self.discriminator(fake_patches.flatten(0, 1)).unflatten(
-                        0, (all_patches.size(0), all_patches.size(1)) # T x B x C x H x W
-                    )
-                    fake_disc = self.patch_contrast(fake_cnn_view.flatten(2, -1)) # T x B x H
+                    fake_cnn_view = self.discriminator(fake_patches.flatten(0, 1))
+                    fake_disc = self.patch_contrast(fake_cnn_view.flatten(-3, -1)) # T x B x H
                     loss_gen = F.binary_cross_entropy_with_logits(fake_disc, torch.ones_like(fake_disc))
 
                     self.log('g_loss', loss_gen, prog_bar=True)
@@ -608,24 +610,24 @@ class SaccadingRNN(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        # Reduce LR on plateau as a reasonable default
-        optimizer = optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.weight_decay)
-
         if not self.adversarial:
+            # Reduce LR on plateau as a reasonable default
+            optimizer = optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.weight_decay)
             return {
                 'optimizer': optimizer,
                 'lr_scheduler': optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=50),
                 'monitor': 'val_loss'
             }
-        opt_mse = optim.Adam(
-            self.parameters()
-        , lr=1e-3, weight_decay=self.weight_decay)
+        main_params = list(self.cnn_sensory.parameters()) + \
+            list(self.sensory_to_memory.parameters()) + \
+            list(self.predict_sensory.parameters()) + \
+            list(self.rnn.parameters()) + \
+            list(self.cnn_predictive.parameters())
+        opt_mse = optim.Adam(main_params, lr=1e-3, weight_decay=self.weight_decay)
         opt_d = optim.Adam(
-            self.parameters()
+            list(self.discriminator.parameters()) + list(self.patch_contrast.parameters())
         , lr=1e-3, weight_decay=self.weight_decay)
-        opt_g = optim.Adam(
-            self.parameters()
-        , lr=1e-3, weight_decay=self.weight_decay)
+        opt_g = optim.Adam(main_params, lr=1e-3, weight_decay=self.weight_decay)
         return [opt_d, opt_g, opt_mse],  []
 
 def upsample_conv(c_in, c_out, scale_factor, k_size=3, stride=1, pad=1, bn=True):

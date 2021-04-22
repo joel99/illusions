@@ -36,9 +36,9 @@ version = 18
 # version = 9
 
 config = './config/snakes_adv.yaml'
-version = 19
-config = './config/snakes_adv_only.yaml'
-version = 13
+version = 20
+# config = './config/snakes_adv_only.yaml'
+# version = 19
 
 variant = osp.split(config)[1].split('.')[0]
 config = get_config(config)
