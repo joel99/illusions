@@ -54,9 +54,12 @@ version = 7
 config = './config/circ.yaml'
 version = 0
 
-config = './config/pdi_batch.yaml'
-version = 10
+config = './config/troxler_batch_clean.yaml'
+config = './config/troxler_batch.yaml'
+version = 0
+
 config = './config/pdi_fourier.yaml'
+config ='./config/pdi_fourier_noise.yaml'
 version = 0
 
 variant = osp.split(config)[1].split('.')[0]
@@ -76,7 +79,6 @@ if config.TASK.NAME == 'UNIFORMITY':
 else:
     dataset = UniformityDataset(config, split="test", dataset_root=f'./data/{config.TASK.NAME}')
 
-#%%
 index = 0
 # index = 2
 # index = 9
@@ -103,13 +105,12 @@ print(all_views.size(), patches.size())
 loss1 = F.mse_loss(all_views[1], patches[0])
 loss1 = F.mse_loss(all_views[1:], patches)
 print(loss1)
+print(saccades.float().mean())
 plt.imshow(image.squeeze(0))
 # Wow, there's barely any loss... what gives?
 
-#%%
-losses = [F.mse_loss(all_views[i+1], patches[i]) for i in range(49)]
-plt.plot(losses)
-print(sum(losses) / len(losses))
+# losses = [F.mse_loss(all_views[i+1], patches[i]) for i in range(49)]
+# plt.plot(losses)
 #%%
 # It don't even look like the right image.
 times = [0, 10, 20, 30]
@@ -145,7 +146,8 @@ grid = torch.stack([torch.tensor(grid_x), torch.tensor(grid_y)], dim=-1).long()
 
 grid = grid.flatten(0, 1)
 step_state = state.expand(grid.size(0), -1, -1)
-patches = model._predict_at_location(step_state, grid, mode='patch').detach()
+
+patches = model._predict_at_location(step_state, grid.unsqueeze(1), mode='patch').detach()
 print(patches.size())
 
 # Assemble patches
@@ -158,13 +160,16 @@ for patch, loc in zip(patches, grid):
         loc[0]: loc[0] + 2 * w_span,
         loc[1]: loc[1] + 2 * h_span
     ] = patch
-#%%
 f, axes = plt.subplots(1, 2, sharex=True, sharey=True)
+
+print(saccades.size()) # ! I think there's a transpose happening
+
 axes[0].scatter(*(saccades.T + w_span), color='white')
-axes[0].imshow(padded_image)
+# Flip direction since saccade higher = matrix lower
+axes[0].imshow(padded_image, origin='lower')
 axes[0].set_title('True')
 axes[0].axis('off')
-axes[1].imshow(belief)
+axes[1].imshow(belief, origin='lower')
 axes[1].set_title('Perceived')
 axes[1].axis('off')
 plt.savefig('test.png', dpi=300)

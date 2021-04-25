@@ -103,7 +103,7 @@ def run_exp(
     if config.TASK.NAME == 'UNIFORMITY':
         test_dataset = UniformityDataset(config, split="test")
     else:
-        dataset = UniformityDataset(config, split="test", dataset_root=f'./data/{config.TASK.NAME}')
+        test_dataset = UniformityDataset(config, split="test", dataset_root=f'./data/{config.TASK.NAME}')
 
     print()
     print("Test results")

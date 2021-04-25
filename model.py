@@ -290,8 +290,8 @@ class SaccadingRNN(pl.LightningModule):
         H, W = image.size()[-2:]
 
         if mode == 'random': # uniform distribution
-            # ! Untested
-            coords_ratio = torch.rand((length, 2), device=image.device)
+            SACCADE_BATCH = self.cfg.SACCADE_BATCH
+            coords_ratio = torch.rand((length, SACCADE_BATCH, 2), device=image.device)
         elif mode == 'walk': # random walk
             # TODO Make walking more realistic -- humans don't random walk off the image.
             # A better heuristic is to weigh directional probability by location
