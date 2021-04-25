@@ -42,6 +42,12 @@ version = 0
 config = './config/snakes_cifar.yaml'
 version = 6
 # TODO add state_dict
+config = './config/snakes_ssim.yaml'
+version = 3
+
+config = './config/pdi.yaml'
+version = 0
+# version = 3
 
 variant = osp.split(config)[1].split('.')[0]
 config = get_config(config)
@@ -58,7 +64,7 @@ model.eval()
 if config.TASK.NAME == 'UNIFORMITY':
     dataset = UniformityDataset(config, split="train")
 else:
-    dataset = UniformityDataset(config, split="train", dataset_root='./data/snakes')
+    dataset = UniformityDataset(config, split="train", dataset_root=f'./data/{config.TASK.NAME}')
 
 #%%
 index = 0

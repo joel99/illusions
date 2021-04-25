@@ -61,6 +61,8 @@ def run_exp(
         dataset = UniformityDataset(config, split="train")
     elif config.TASK.NAME == 'snakes':
         dataset = UniformityDataset(config, split="train", dataset_root='./data/snakes')
+    elif config.TASK.NAME == 'pdi':
+        dataset = UniformityDataset(config, split="train", dataset_root='./data/pdi', augment=['rotate'])
     # elif config.TASK.NAME == 'CIFAR':
     #     dataset = torchvision.datasets.CIFAR10(
     #         root='./data',
@@ -110,6 +112,8 @@ def run_exp(
         test_dataset = UniformityDataset(config, split="test")
     elif config.TASK.NAME == 'snakes':
         test_dataset = UniformityDataset(config, split="test", dataset_root='./data/snakes')
+    elif config.TASK.NAME == 'pdi':
+        test_dataset = UniformityDataset(config, split="test", dataset_root='./data/pdi')
     else:
         raise NotImplementedError
 

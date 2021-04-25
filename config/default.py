@@ -48,6 +48,7 @@ _C.MODEL.WALK_PACE = 0.1
 _C.MODEL.PROPRIOCEPTION_DELTA = False
 _C.MODEL.FOURIER_PROPRIO = False
 _C.MODEL.FOURIER_PROPRIO_SCALE = 1 # unused
+_C.MODEL.POLAR_PROPRIO = False
 _C.MODEL.UPSAMPLE_CONV = True
 _C.MODEL.INCLUDE_PROPRIO = True # debug option to flag all proprioceptive inputs (vision-only model)
 _C.MODEL.REACTIVE = False # debug option to turn off RNN. Assumes include_proprio.
@@ -62,6 +63,7 @@ _C.MODEL.OBJECTIVES = ['predictive']
 # * the problem is that we can't remember.
 _C.MODEL.NOISED_SIGNAL = True # Whether to use noised patches for supervision. True is self-supervised.
 _C.MODEL.CIFAR_LOSS = False
+_C.MODEL.SSIM_LOSS = False
 
 # -----------------------------------------------------------------------------
 # Train Config

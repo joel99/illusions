@@ -9,8 +9,21 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 
 import torchvision.transforms.functional as F_vis
-from mobilenet_v2 import mobilenet_v2
 from vgg import vgg11_bn
+import pytorch_ssim
+
+class SSIMMSE(nn.Module):
+    def __init__(self, device):
+        # device ain't helpful at this point
+        super().__init__()
+        self.ssim = pytorch_ssim.SSIM(window_size=7)
+        # self.ssim = pytorch_ssim.SSIM(window_size=11)
+
+    def forward(self, x, y):
+        # x, y: T B C H W
+        x = x.flatten(0, 1)
+        y = y.flatten(0, 1)
+        return self.ssim(x, y)
 
 class CIFARMSE(nn.Module):
     # returns mse of activations on nth layer of a CIFAR module
@@ -89,6 +102,24 @@ class GaussianFourierFeatureTransform(nn.Module):
         x = 2 * np.pi * x
         return torch.cat([torch.sin(x), torch.cos(x)], dim=1)
 
+class PolarTransform(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, grid):
+        batch, channel, x, y = grid.shape
+        center = x // 2
+        # TODO figure this out...
+        x = x - center
+        y = y - center
+        import pdb; pdb.set_trace()
+
+        # -0.5 to 0.5 now
+        rho = torch.norm(cart, p=2, dim=-1).view(-1, 1)
+
+        theta = torch.atan2(cart[..., 1], cart[..., 0]).view(-1, 1)
+        theta = theta + (theta < 0).type_as(theta) * (2 * PI)
+
 class SaccadingRNN(pl.LightningModule):
     # We'll train this network with images. We can saccade for e.g. 100 timesteps per image and learn through self-supervision.
     # This model is driven by a saccading policy (here it is hardcoded to pick a random sequence of locations)
@@ -125,9 +156,12 @@ class SaccadingRNN(pl.LightningModule):
         flat_cnn_out = conv_dim * self.conv_outh * self.conv_outw
 
         self.proprio_size = 2
+        if self.cfg.POLAR_PROPRIO:
+            self.proprio_size = 2
+            self.proprio_transform = PolarTransform()
         if self.cfg.FOURIER_PROPRIO:
             self.proprio_size = 32
-            self.fft_transform = GaussianFourierFeatureTransform(mapping_size=self.proprio_size // 2)
+            self.proprio_transform = GaussianFourierFeatureTransform(mapping_size=self.proprio_size // 2)
             self.proprio_grid = None
 
         if self.cfg.INCLUDE_PROPRIO:
@@ -181,7 +215,12 @@ class SaccadingRNN(pl.LightningModule):
                 nn.Tanh()
             )
         self.mse = nn.MSELoss()
-        self.perceptual_mse = CIFARMSE(self.device) if self.cfg.CIFAR_LOSS else self.mse
+        if self.cfg.CIFAR_LOSS:
+            self.perceptual_mse = CIFARMSE(self.device)
+        elif self.cfg.SSIM_LOSS:
+            self.perceptual_mse = SSIMMSE(self.device)
+        else:
+            self.perceptual_mse = self.mse
         self.xent = nn.CrossEntropyLoss()
 
         if 'contrast' in self.cfg.OBJECTIVES:
@@ -201,11 +240,15 @@ class SaccadingRNN(pl.LightningModule):
         self.saccade_training_mode = self.cfg.SACCADE
         self.view_mask = self._generate_falloff_mask()
 
-    def _gen_fft_proprio(self, target):
+    def _gen_proprio(self, target):
+        if not (self.cfg.FOURIER_PROPRIO or self.cfg.POLAR_PROPRIO):
+            self.proprio_grid = 0 # dummy
+            return
         coords = np.linspace(0, 1, target.shape[2], endpoint=False)
         xy_grid = np.stack(np.meshgrid(coords, coords), -1)
         proprio_grid = torch.tensor(xy_grid).unsqueeze(0).permute(0, 3, 1, 2).float().contiguous().to(self.device)
-        self.proprio_grid = self.fft_transform(proprio_grid).squeeze(0) # C H W
+        self.proprio_grid = self.proprio_transform(proprio_grid).squeeze(0) # C H W
+
 
     def _transform_proprio(self, proprio):
         # b x 2 -> b x h
@@ -408,8 +451,8 @@ class SaccadingRNN(pl.LightningModule):
                 hidden_state: [B x H] (model memory at conclusion)
         """
         self.view_mask = self.view_mask.to(self.device) # ! weird, we can't set it in __init__()
-        if self.cfg.FOURIER_PROPRIO and self.proprio_grid is None:
-            self._gen_fft_proprio(image)
+        if self.proprio_grid is None:
+            self._gen_proprio(image)
         if initial_state is None:
             hidden_state = torch.zeros((1, image.size(0), self.cfg.HIDDEN_SIZE), device=self.device)
         else:
@@ -529,8 +572,8 @@ class SaccadingRNN(pl.LightningModule):
             Finer control
         """
         image = image.unsqueeze(0)
-        if self.cfg.FOURIER_PROPRIO and self.proprio_grid is None:
-            self._gen_fft_proprio(image)
+        if self.proprio_grid is None:
+            self._gen_proprio(image)
         all_patches = []
 
         if initial_state is None:

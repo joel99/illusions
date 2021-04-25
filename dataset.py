@@ -8,13 +8,15 @@ from yacs.config import CfgNode as CN
 import torch
 from torch.utils.data import Dataset
 import torchvision.transforms.functional as F
+import torchvision.transforms as transforms
 
 class UniformityDataset(Dataset):
     def __init__(
         self,
         config,
         split='train',
-        dataset_root='./data/UNIFORMITY'
+        dataset_root='./data/UNIFORMITY',
+        augment=[]
     ):
         super().__init__()
         dataset_root = osp.join(dataset_root, split)
@@ -22,13 +24,21 @@ class UniformityDataset(Dataset):
         self.all_paths = [f for f in self.all_paths if isfile(f)]
         self.grayscale = config.TASK.CHANNELS == 1
         self.cache = {}
+        self.transform = None
+        if 'rotate' in augment:
+            self.transform = transforms.RandomRotation(
+                40
+                # torch.arange(-40, 45, 5)
+            )
 
     def preprocess(self, img):
         img = F.resize(img, (64, 64))
         if self.grayscale:
             img = F.to_grayscale(img)
         # * Note, uniformity images are encoded 0-1, ensure this is true in other datasets
-        return F.to_tensor(img) - 0.5 # 0-center.
+        if self.transform is not None:
+            img = self.transform(img)
+        return F.to_tensor(img) - 0.5
 
     @staticmethod
     def unpreprocess(view):
@@ -44,6 +54,6 @@ class UniformityDataset(Dataset):
             return self.cache[index]
         img = Image.open(self.all_paths[index])
         item = self.preprocess(img)
-        if len(self) < 10:
+        if self.transform is not None and len(self) < 10:
             self.cache[index] = item
         return item
