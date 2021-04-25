@@ -59,7 +59,9 @@ config = './config/troxler_batch.yaml'
 version = 0
 
 config = './config/pdi_fourier.yaml'
-config ='./config/pdi_fourier_noise.yaml'
+config = './config/pdi_fourier_random.yaml'
+# config ='./config/pdi_fourier_noise.yaml'
+config ='./config/pdi_fourier_noise_random.yaml'
 version = 0
 
 variant = osp.split(config)[1].split('.')[0]

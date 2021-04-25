@@ -60,7 +60,7 @@ def run_exp(
     if config.TASK.NAME == 'UNIFORMITY':
         dataset = UniformityDataset(config, split="train")
     else:
-        dataset = UniformityDataset(config, split="train", dataset_root=f'./data/{config.TASK.NAME}')
+        dataset = UniformityDataset(config, split="train", dataset_root=f'./data/{config.TASK.NAME}', augment=['rotate'])
 
     length = len(dataset)
     if OVERFIT:
