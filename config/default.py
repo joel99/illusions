@@ -64,6 +64,7 @@ _C.MODEL.OBJECTIVES = ['predictive']
 _C.MODEL.NOISED_SIGNAL = True # Whether to use noised patches for supervision. True is self-supervised.
 _C.MODEL.CIFAR_LOSS = False
 _C.MODEL.SSIM_LOSS = False
+_C.MODEL.SACCADE_BATCH = 1 # very hacky test for overfit images only!
 
 # -----------------------------------------------------------------------------
 # Train Config

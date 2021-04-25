@@ -250,7 +250,9 @@ class SaccadingRNN(pl.LightningModule):
         # b x 2 -> b x h
         if not (self.cfg.FOURIER_PROPRIO or self.cfg.POLAR_PROPRIO):
             return proprio
-        return self.proprio_grid[:, proprio[:, 0], proprio[:, 1]].permute(1, 0)
+        flat_prop = proprio.flatten(0, 1)
+        transformed = self.proprio_grid[:, flat_prop[:, 0], flat_prop[:, 1]].permute(1, 0)
+        return transformed.unflatten(0, proprio.size()[:2])
 
     def _evaluate_image_pred(self, gt, pred):
         # Note: the actual quantization scheme was proposed in a more sophisticated way (ref: https://github.com/richzhang/colorization/tree/caffe)
@@ -282,7 +284,7 @@ class SaccadingRNN(pl.LightningModule):
         #   length: length of saccading sequence
         #   mode: saccadding mode. (controlling model operation)
         # returns:
-        #   coords: [length x 2] . pixel coordinates
+        #   coords: [length x B x 2] . pixel coordinates
         if mode is None:
             mode = self.saccade_training_mode
         H, W = image.size()[-2:]
@@ -295,8 +297,9 @@ class SaccadingRNN(pl.LightningModule):
             # A better heuristic is to weigh directional probability by location
             #   but that might be too slow.
             WALK_PACE = self.cfg.WALK_PACE
-            start_ratio = torch.tensor([0.5, 0.5], device=self.device).unsqueeze(0).float() # 1 x 2
-            deltas_ratio = torch.randn((length - 1, 2), device=self.device) * WALK_PACE
+            SACCADE_BATCH = self.cfg.SACCADE_BATCH
+            start_ratio = torch.tensor([0.5, 0.5], device=self.device).expand(1, SACCADE_BATCH, -1) # 1 x B x 2
+            deltas_ratio = torch.randn((length - 1, SACCADE_BATCH, 2), device=self.device) * WALK_PACE
             coords_ratio = torch.cat([start_ratio, deltas_ratio], dim=0)
             coords_ratio = torch.cumsum(coords_ratio, dim=0)
         elif mode == 'fixate': # center with Gaussian offset for drift.
@@ -315,7 +318,10 @@ class SaccadingRNN(pl.LightningModule):
             image_scale = torch.tensor([H - 1, W - 1], device=self.device).float()
         else:
             image_scale = torch.tensor([H, W], device=self.device).float()
-        return (coords_ratio * image_scale).long()
+        coord = (coords_ratio * image_scale).long()
+        if len(coord.size()) == 2:
+            return coord.unsqueeze(1)
+        return coord
 
     def _generate_falloff_mask(self):
         # TODO Joel look at what Gaussian blur actually is.
@@ -336,17 +342,16 @@ class SaccadingRNN(pl.LightningModule):
         Memory conditioned predictions
         Args:
             state: [T x B x H] state to make prediction with (either CNN output in predictive coding, or memory)
-            focus: [T x 2] location to predict at (given as pixel locs (long))
+            focus: [T x B x 2] location to predict at (given as pixel locs (long))
             mode: 'patch' for pixel reconstruction or 'percept' for CNN reconstruction
         Returns:
             patches: [B x C x H x W] predicted patches at given locations
         """
         if self.cfg.INCLUDE_PROPRIO:
             focus = self._transform_proprio(focus) # T x 2 -> T x H
-            state = torch.cat([
-                state,
-                focus.unsqueeze(1).expand(-1, state.size(1), -1)
-            ], dim=-1)
+            if len(focus.size()) == 2:
+                focus = focus.unsqueeze(1).expand(-1, state.size(1), -1)
+            state = torch.cat([state, focus], dim=-1)
         prediction_cue = self.predict_sensory(state) # extract cnn prediction
         if mode == 'patch': # Make a prediction about image patch from memory
             # T x B x Hidden -> T x B x C x H x W
@@ -363,7 +368,7 @@ class SaccadingRNN(pl.LightningModule):
             Requires some reshaping for a single step (and thus may be annoying for active perception)
             Args:
                 view: [T x B x C x H x W] - cropped views.
-                saccade_focus: [T x 2] - proprioception (shared across batch)
+                saccade_focus: [T x B' x 2] - proprioception (shared across batch)
                 hidden_state: [B x Hidden] (initial hidden state)
             Returns:
                 cnn_view: [T x B x C x H' x W'] CNN outputs
@@ -372,7 +377,6 @@ class SaccadingRNN(pl.LightningModule):
         """
         if self.adaptation is not None:
             view = self.adaptation(view)
-
         cnn_view = self.cnn_sensory(view.flatten(0, 1)).unflatten(
             0, (view.size(0), view.size(1)) # T x B x C x H x W
         )
@@ -380,7 +384,7 @@ class SaccadingRNN(pl.LightningModule):
         memory_input = self.sensory_to_memory(flat_cnn_view) # T x B x Hidden
         if self.cfg.INCLUDE_PROPRIO:
             saccade_focus = self._transform_proprio(saccade_focus)
-            saccade_sense = saccade_focus.unsqueeze(1).expand(
+            saccade_sense = saccade_focus.expand(
                 -1, view.size(1), -1
             ) # T x B x 2
             memory_input = torch.cat([memory_input, saccade_sense], dim=-1)
@@ -389,6 +393,9 @@ class SaccadingRNN(pl.LightningModule):
         return cnn_view, memory_input, rnn_view, hidden_state
 
     def get_views(self, image, saccades):
+        # images: T x B x C x H x W
+        # saccades: T x B x 2 -- !
+        assert image.size(1) == 1 or saccades.size(1) == 1
         all_views = [] # raw and noised.
         w_span, h_span = self.cfg.FOV_WIDTH // 2, self.cfg.FOV_HEIGHT // 2
 
@@ -396,7 +403,7 @@ class SaccadingRNN(pl.LightningModule):
         # TODO Joel this can probably be vectorized
         # If anyone else knows how to do this please go ahead + cc: Joel.
         padded_image = F.pad(image, (w_span, w_span, h_span, h_span))
-        for saccade in saccades:
+        for saccade in saccades.flatten(0, 1):
             w_span, h_span = self.cfg.FOV_WIDTH // 2, self.cfg.FOV_HEIGHT // 2
             view = padded_image[
                 ...,
@@ -405,6 +412,9 @@ class SaccadingRNN(pl.LightningModule):
             ]
             all_views.append(view)
         all_views = torch.stack(all_views, 0) # T x B x C x H x W
+        if saccades.size(1) > 1:
+            all_views = all_views.squeeze(1).unflatten(0, saccades.size()[:2])
+
         noise = torch.randn(all_views.size(), device=self.device) * self.cfg.FOV_FALLOFF
         noised_views = all_views + noise * self.view_mask
         if self.cfg.CLAMP_FOV:
@@ -458,6 +468,9 @@ class SaccadingRNN(pl.LightningModule):
         saccades = self._generate_saccades(image, length=length, mode=mode)
         all_views, noised_views = self.get_views(image, saccades)
         proprioception = self.get_proprioception(image, saccades)
+
+        if all_views.size(1) != hidden_state.size(1):
+            hidden_state = hidden_state.repeat(1, all_views.size(1), 1) # force batch
 
         # Forward and calculate loss
         cnn_view, memory_input, rnn_view, hidden_state = self(noised_views, proprioception, hidden_state)

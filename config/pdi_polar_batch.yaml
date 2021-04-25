@@ -1,0 +1,12 @@
+TASK:
+    NAME: 'pdi'
+    CHANNELS: 1
+MODEL:
+    SACCADE: 'walk'
+    OBJECTIVES: ['predictive_patch']
+    NOISED_SIGNAL: False
+    POLAR_PROPRIO: True
+    HIDDEN_SIZE: 512
+    SACCADE_BATCH: 32
+TRAIN:
+    EPOCHS: 120

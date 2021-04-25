@@ -49,7 +49,15 @@ config = './config/pdi.yaml'
 version = 0
 # version = 3
 config = './config/pdi_polar.yaml'
-version = 6
+version = 7
+
+config = './config/circ.yaml'
+version = 0
+
+config = './config/pdi_batch.yaml'
+version = 10
+config = './config/pdi_fourier.yaml'
+version = 0
 
 variant = osp.split(config)[1].split('.')[0]
 config = get_config(config)
@@ -82,7 +90,7 @@ proc_view = UniformityDataset.unpreprocess(image).permute(1, 2, 0)
 proc_view = proc_view.squeeze(-1)
 plt.imshow(proc_view)
 
-saccades = model._generate_saccades(image)
+saccades = model._generate_saccades(image)[:, :1]
 all_views, noised_views, patches, state = model.predict_with_saccades(image, saccades, mode='predictive_patch')
 # Note, simply using saccades twice in a row is OOD.
 
