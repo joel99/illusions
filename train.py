@@ -59,17 +59,9 @@ def run_exp(
 
     if config.TASK.NAME == 'UNIFORMITY':
         dataset = UniformityDataset(config, split="train")
-    elif config.TASK.NAME == 'snakes':
-        dataset = UniformityDataset(config, split="train", dataset_root='./data/snakes')
-    elif config.TASK.NAME == 'pdi':
-        dataset = UniformityDataset(config, split="train", dataset_root='./data/pdi', augment=['rotate'])
-    # elif config.TASK.NAME == 'CIFAR':
-    #     dataset = torchvision.datasets.CIFAR10(
-    #         root='./data',
-    #         transform=torchvision.transforms.Resize((64, 64))
-    #     )
     else:
-        raise NotImplementedError
+        dataset = UniformityDataset(config, split="train", dataset_root=f'./data/{config.TASK.NAME}')
+
     length = len(dataset)
     if OVERFIT:
         train = dataset
@@ -110,12 +102,8 @@ def run_exp(
 
     if config.TASK.NAME == 'UNIFORMITY':
         test_dataset = UniformityDataset(config, split="test")
-    elif config.TASK.NAME == 'snakes':
-        test_dataset = UniformityDataset(config, split="test", dataset_root='./data/snakes')
-    elif config.TASK.NAME == 'pdi':
-        test_dataset = UniformityDataset(config, split="test", dataset_root='./data/pdi')
     else:
-        raise NotImplementedError
+        dataset = UniformityDataset(config, split="test", dataset_root=f'./data/{config.TASK.NAME}')
 
     print()
     print("Test results")

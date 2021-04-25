@@ -48,6 +48,8 @@ version = 3
 config = './config/pdi.yaml'
 version = 0
 # version = 3
+config = './config/pdi_polar.yaml'
+version = 6
 
 variant = osp.split(config)[1].split('.')[0]
 config = get_config(config)
@@ -64,7 +66,7 @@ model.eval()
 if config.TASK.NAME == 'UNIFORMITY':
     dataset = UniformityDataset(config, split="train")
 else:
-    dataset = UniformityDataset(config, split="train", dataset_root=f'./data/{config.TASK.NAME}')
+    dataset = UniformityDataset(config, split="test", dataset_root=f'./data/{config.TASK.NAME}')
 
 #%%
 index = 0
@@ -91,21 +93,31 @@ all_views, noised_views, patches, state = model.predict_with_saccades(image, sac
 
 print(all_views.size(), patches.size())
 loss1 = F.mse_loss(all_views[1], patches[0])
+loss1 = F.mse_loss(all_views[1:], patches)
 print(loss1)
 plt.imshow(image.squeeze(0))
+# Wow, there's barely any loss... what gives?
 
+#%%
+losses = [F.mse_loss(all_views[i+1], patches[i]) for i in range(49)]
+plt.plot(losses)
+print(sum(losses) / len(losses))
 #%%
 # It don't even look like the right image.
 times = [0, 10, 20, 30]
 f, axes = plt.subplots(len(times), 2, sharex=True, sharey=True)
 for i, t in enumerate(times):
-    true_image = noised_views[t + all_views.size(0) - patches.size(0), 0]
+    true_image = all_views[t + all_views.size(0) - patches.size(0), 0]
+    # true_image = noised_views[t + all_views.size(0) - patches.size(0), 0]
     proc_true = UniformityDataset.unpreprocess(true_image).permute(1, 2, 0)
     proc_true = proc_true.squeeze(-1)
 
     # axes[i, 0].imshow(proc_true[..., 2])
     axes[i, 0].imshow(proc_true)
     pred_image = patches[t, 0]
+
+    print(F.mse_loss(true_image, pred_image)) # how can my average in the previous timestep be lower than all my samples here?
+
     proc_pred = UniformityDataset.unpreprocess(pred_image).permute(1, 2, 0)
     proc_pred = proc_pred.squeeze(-1)
     # axes[i, 1].imshow(proc_pred[..., 2])

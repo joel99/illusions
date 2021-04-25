@@ -25,7 +25,7 @@ class UniformityDataset(Dataset):
         self.grayscale = config.TASK.CHANNELS == 1
         self.cache = {}
         self.transform = None
-        if 'rotate' in augment:
+        if 'rotate' in augment and split == 'train':
             self.transform = transforms.RandomRotation(
                 40
                 # torch.arange(-40, 45, 5)

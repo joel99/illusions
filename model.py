@@ -1,7 +1,6 @@
 # Model definition
 from typing import List, Tuple, Optional
 from yacs.config import CfgNode as CN
-
 import numpy as np
 import torch
 from torch import nn, optim
@@ -106,19 +105,16 @@ class PolarTransform(nn.Module):
     def __init__(self):
         super().__init__()
 
+    def _cart_to_pol(self, x, y):
+        rho = torch.sqrt(x**2 + y**2)
+        phi = torch.atan2(y, x) / np.pi
+        return(rho, phi)
+
     def forward(self, grid):
         batch, channel, x, y = grid.shape
-        center = x // 2
-        # TODO figure this out...
-        x = x - center
-        y = y - center
-        import pdb; pdb.set_trace()
-
-        # -0.5 to 0.5 now
-        rho = torch.norm(cart, p=2, dim=-1).view(-1, 1)
-
-        theta = torch.atan2(cart[..., 1], cart[..., 0]).view(-1, 1)
-        theta = theta + (theta < 0).type_as(theta) * (2 * PI)
+        grid = grid - 0.5
+        item = self._cart_to_pol(grid[0,0], grid[0, 1])
+        return torch.stack(item, 0).unsqueeze(0)
 
 class SaccadingRNN(pl.LightningModule):
     # We'll train this network with images. We can saccade for e.g. 100 timesteps per image and learn through self-supervision.
@@ -156,13 +152,12 @@ class SaccadingRNN(pl.LightningModule):
         flat_cnn_out = conv_dim * self.conv_outh * self.conv_outw
 
         self.proprio_size = 2
+        self.proprio_grid = None
         if self.cfg.POLAR_PROPRIO:
-            self.proprio_size = 2
             self.proprio_transform = PolarTransform()
         if self.cfg.FOURIER_PROPRIO:
             self.proprio_size = 32
             self.proprio_transform = GaussianFourierFeatureTransform(mapping_size=self.proprio_size // 2)
-            self.proprio_grid = None
 
         if self.cfg.INCLUDE_PROPRIO:
             memory_input_size = self.cfg.SENSORY_SIZE - self.proprio_size
@@ -241,6 +236,7 @@ class SaccadingRNN(pl.LightningModule):
         self.view_mask = self._generate_falloff_mask()
 
     def _gen_proprio(self, target):
+        # proprio_grid is pre-calculated coordinate transform
         if not (self.cfg.FOURIER_PROPRIO or self.cfg.POLAR_PROPRIO):
             self.proprio_grid = 0 # dummy
             return
@@ -252,7 +248,7 @@ class SaccadingRNN(pl.LightningModule):
 
     def _transform_proprio(self, proprio):
         # b x 2 -> b x h
-        if not self.cfg.FOURIER_PROPRIO:
+        if not (self.cfg.FOURIER_PROPRIO or self.cfg.POLAR_PROPRIO):
             return proprio
         return self.proprio_grid[:, proprio[:, 0], proprio[:, 1]].permute(1, 0)
 
@@ -314,7 +310,7 @@ class SaccadingRNN(pl.LightningModule):
         elif mode == 'constant':
             coords_ratio = torch.full((length, 2), 0.5, device=self.device)
         coords_ratio = torch.clamp(coords_ratio, 0, 1)
-        if self.cfg.FOURIER_PROPRIO:
+        if self.cfg.FOURIER_PROPRIO or self.cfg.POLAR_PROPRIO:
             # fix off by one error that only raises in this case
             image_scale = torch.tensor([H - 1, W - 1], device=self.device).float()
         else:
@@ -423,7 +419,7 @@ class SaccadingRNN(pl.LightningModule):
                 torch.zeros((1,2), dtype=torch.float, device=self.device), proprioception
             ], dim=0)
         else:
-            if self.cfg.FOURIER_PROPRIO:
+            if self.cfg.FOURIER_PROPRIO or self.cfg.POLAR_PROPRIO:
                 return saccades
             else:
                 return saccades.float() / torch.tensor(image.size()[-2:], device=self.device).float() - 0.5 # 0 center
@@ -637,7 +633,6 @@ class SaccadingRNN(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         loss, *_ = self.saccade_image(batch)
         self.log('test_loss', loss, prog_bar=True)
-        # TODO probably want to log down images as well
         return loss
 
     def configure_optimizers(self):

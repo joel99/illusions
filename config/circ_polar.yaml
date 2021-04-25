@@ -1,0 +1,11 @@
+TASK:
+    NAME: 'troxler'
+    CHANNELS: 1
+MODEL:
+    SACCADE: 'walk'
+    OBJECTIVES: ['predictive_patch']
+    NOISED_SIGNAL: False
+    POLAR_PROPRIO: True
+    HIDDEN_SIZE: 512
+TRAIN:
+    EPOCHS: 120
