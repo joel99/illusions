@@ -8,6 +8,44 @@ from torch import nn, optim
 import torch.nn.functional as F
 import pytorch_lightning as pl
 
+import torchvision.transforms.functional as F_vis
+from mobilenet_v2 import mobilenet_v2
+from vgg import vgg11_bn
+
+class CIFARMSE(nn.Module):
+    # returns mse of activations on nth layer of a CIFAR module
+
+    def __init__(self, device, layer=4):
+        # device ain't helpful at this point
+        super().__init__()
+        # self.net = mobilenet_v2(pretrained=True).features[:layer]
+        self.net = vgg11_bn(pretrained=True).features[:layer]
+        self.layers = [64, "M", 128, "M", 256, 256, "M", 512, 512, "M", 512, 512, "M"]
+        self.net.eval()
+        self.mean = torch.tensor((0.4914, 0.4822, 0.4465)).view(-1, 1, 1)
+        self.std = torch.tensor((0.2471, 0.2435, 0.2616)).view(-1, 1, 1)
+        # self.mse = nn.MSELoss()
+
+    def forward(self, x, y):
+        # x, y: T B C H W
+        # mobile net needs 3D inputs in 0-1. We have 1D -1 to 1
+        if x.device != self.mean.device:
+            self.mean = self.mean.to(x.device)
+            self.std = self.std.to(x.device)
+        x = x.flatten(0, 1).expand(-1, 3, -1, -1)
+        y = y.flatten(0, 1).expand(-1, 3, -1, -1)
+        x = x / 2. + 0.5
+        y = y / 2. + 0.5
+        x = (x - self.mean) / self.std
+        y = (y - self.mean) / self.std
+        losses = []
+        for i, layer in enumerate(self.net):
+            x = layer(x)
+            y = layer(y)
+            if self.layers[i] != "M":
+                losses.append(torch.nn.functional.l1_loss(x, y))
+        return torch.stack(losses).mean()
+
 class GaussianFourierFeatureTransform(nn.Module):
     """
     An implementation of Gaussian Fourier feature mapping.
@@ -143,6 +181,7 @@ class SaccadingRNN(pl.LightningModule):
                 nn.Tanh()
             )
         self.mse = nn.MSELoss()
+        self.perceptual_mse = CIFARMSE(self.device) if self.cfg.CIFAR_LOSS else self.mse
         self.xent = nn.CrossEntropyLoss()
 
         if 'contrast' in self.cfg.OBJECTIVES:
@@ -179,7 +218,7 @@ class SaccadingRNN(pl.LightningModule):
         # Doing this for simplicity
         # gt: T B C H W
         if self.cfg.QUANTIZED_RECONSTRUCTION <= 1:
-            return self.mse(pred, gt)
+            return self.perceptual_mse(pred, gt)
         # Expecting GT to vary [-0.5, 0.5]
         quantized_gt = ((gt + 0.5) * (self.cfg.QUANTIZED_RECONSTRUCTION - 1)).long().flatten(0, 2)
         return self.xent(pred.flatten(0, 1), quantized_gt)
@@ -563,11 +602,11 @@ class SaccadingRNN(pl.LightningModule):
         optimizer = optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.weight_decay)
         # optimizer_generator = optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.weight_decay)
         # optimizer_discriminator = optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.weight_decay)
-        return [{
+        return {
             'optimizer': optimizer,
             'lr_scheduler': optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=50),
             'monitor': 'val_loss'
-        }]
+        }
 
 def upsample_conv(c_in, c_out, scale_factor, k_size=3, stride=1, pad=1, bn=True):
     return nn.Sequential(

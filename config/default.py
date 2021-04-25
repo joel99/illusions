@@ -61,6 +61,7 @@ _C.MODEL.OBJECTIVES = ['predictive']
 # contrast: minibatch contrast, same image = positives. to improve image reprs.
 # * the problem is that we can't remember.
 _C.MODEL.NOISED_SIGNAL = True # Whether to use noised patches for supervision. True is self-supervised.
+_C.MODEL.CIFAR_LOSS = False
 
 # -----------------------------------------------------------------------------
 # Train Config
@@ -70,7 +71,6 @@ _C.TRAIN = CN()
 _C.TRAIN.BATCH_SIZE = 64 # 32-64 are approx same results
 _C.TRAIN.EPOCHS = 10
 _C.TRAIN.WEIGHT_DECAY = 0.0
-
 
 def get_cfg_defaults():
   """Get default LFADS config (yacs config node)."""

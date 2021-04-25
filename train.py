@@ -14,7 +14,7 @@ from dataset import UniformityDataset
 from model import SaccadingRNN
 
 OVERFIT = False
-# OVERFIT = True
+OVERFIT = True
 
 def get_parser():
     parser = argparse.ArgumentParser()
@@ -61,7 +61,6 @@ def run_exp(
         dataset = UniformityDataset(config, split="train")
     elif config.TASK.NAME == 'snakes':
         dataset = UniformityDataset(config, split="train", dataset_root='./data/snakes')
-        OVERFIT = True
     # elif config.TASK.NAME == 'CIFAR':
     #     dataset = torchvision.datasets.CIFAR10(
     #         root='./data',

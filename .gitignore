@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 *.pdf
 *.png
+state_dicts
