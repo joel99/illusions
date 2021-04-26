@@ -27,7 +27,8 @@ class UniformityDataset(Dataset):
         self.transform = None
         if 'rotate' in augment and split == 'train':
             self.transform = transforms.RandomRotation(
-                40
+                40,
+                fill=(1,)
                 # torch.arange(-40, 45, 5)
             )
 
@@ -38,7 +39,8 @@ class UniformityDataset(Dataset):
         # * Note, uniformity images are encoded 0-1, ensure this is true in other datasets
         if self.transform is not None:
             img = self.transform(img)
-        return F.to_tensor(img) - 0.5
+        img = F.to_tensor(img)
+        return img - 0.5
 
     @staticmethod
     def unpreprocess(view):

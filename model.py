@@ -653,11 +653,14 @@ class SaccadingRNN(pl.LightningModule):
         optimizer = optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.weight_decay)
         # optimizer_generator = optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.weight_decay)
         # optimizer_discriminator = optim.Adam(self.parameters(), lr=1e-3, weight_decay=self.weight_decay)
-        return {
+        opt_dict = {
             'optimizer': optimizer,
             'lr_scheduler': optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=50),
             'monitor': 'val_loss'
         }
+        if self.cfg.FIXED_LR:
+            del opt_dict["lr_scheduler"]
+        return opt_dict
 
 def upsample_conv(c_in, c_out, scale_factor, k_size=3, stride=1, pad=1, bn=True):
     return nn.Sequential(

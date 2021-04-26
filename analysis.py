@@ -58,11 +58,12 @@ config = './config/troxler_batch_clean.yaml'
 config = './config/troxler_batch.yaml'
 version = 0
 
-config = './config/pdi_fourier.yaml'
-config = './config/pdi_fourier_random.yaml'
+# config = './config/pdi_fourier.yaml'
 # config ='./config/pdi_fourier_noise.yaml'
-config ='./config/pdi_fourier_noise_random.yaml'
-version = 0
+# config = './config/pdi_fourier_random.yaml'
+config = './config/pdi_fourier_noise_random.yaml'
+version = 0 # Overfit
+# version = 2 # Generalization
 
 variant = osp.split(config)[1].split('.')[0]
 config = get_config(config)
@@ -79,7 +80,8 @@ model.eval()
 if config.TASK.NAME == 'UNIFORMITY':
     dataset = UniformityDataset(config, split="train")
 else:
-    dataset = UniformityDataset(config, split="test", dataset_root=f'./data/{config.TASK.NAME}')
+    dataset = UniformistyDataset(config, split="train", dataset_root=f'./data/{config.TASK.NAME}', augment=['rotate'])
+    # dataset = UniformityDataset(config, split="test", dataset_root=f'./data/{config.TASK.NAME}')
 
 index = 0
 # index = 2
@@ -94,7 +96,8 @@ proc_view = UniformityDataset.unpreprocess(image).permute(1, 2, 0)
 proc_view = proc_view.squeeze(-1)
 plt.imshow(proc_view)
 
-saccades = model._generate_saccades(image)[:, :1]
+sac_length = 50
+saccades = model._generate_saccades(image, length=sac_length)[:, :1]
 all_views, noised_views, patches, state = model.predict_with_saccades(image, saccades, mode='predictive_patch')
 # Note, simply using saccades twice in a row is OOD.
 
@@ -109,10 +112,12 @@ loss1 = F.mse_loss(all_views[1:], patches)
 print(loss1)
 print(saccades.float().mean())
 plt.imshow(image.squeeze(0))
+plt.axis('off')
 # Wow, there's barely any loss... what gives?
 
 # losses = [F.mse_loss(all_views[i+1], patches[i]) for i in range(49)]
 # plt.plot(losses)
+
 #%%
 # It don't even look like the right image.
 times = [0, 10, 20, 30]
